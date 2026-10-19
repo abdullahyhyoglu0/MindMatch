@@ -1,0 +1,44 @@
+
+services:
+  mindmatch-postgres:
+    image: postgres:17
+    container_name: mindmatch-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mindmatch_db
+      POSTGRES_USER: mindmatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-MindMatch_Local_Only_Change_Me}
+    ports:
+      - "5434:5432"
+    volumes:
+      - mindmatch_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mindmatch -d mindmatch_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mindmatch-redis:
+    image: redis:7-alpine
+    container_name: mindmatch-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mindmatch_postgres_data:

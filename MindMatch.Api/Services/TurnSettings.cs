@@ -1,0 +1,8 @@
+namespace MindMatch.Api.Services;
+
+public sealed class TurnSettings
+{
+    public string[] Urls { get; set; } = [];
+    public string SharedSecret { get; set; } = string.Empty;
+    public int CredentialLifetimeSeconds { get; set; } = 600;
+}

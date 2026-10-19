@@ -1,0 +1,21 @@
+services:
+  coturn:
+    image: coturn/coturn:4.18.0
+    container_name: mindmatch-turn
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - -n
+      - --no-tls
+      - --fingerprint
+      - --lt-cred-mech
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SHARED_SECRET:?Set TURN_SHARED_SECRET in turn/.env}
+      - --realm=${TURN_REALM:?Set TURN_REALM in turn/.env}
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --no-multicast-peers
+      - --no-loopback-peers
+      - --log-file=stdout
+      - --simple-log

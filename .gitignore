@@ -1,0 +1,38 @@
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/appsettings.Development.json
+**/appsettings.Production.json
+register.json
+
+# Build and dependency output
+**/bin/
+**/obj/
+**/node_modules/
+**/.expo/
+**/dist/
+**/build/
+.build-check/
+dist-share/
+
+# IDE and operating system files
+.vs/
+.idea/
+.vscode/
+**/.claude/
+**/.git_codex_hold/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini
+
+# Local data and logs
+*.log
+*.sqlite
+*.sqlite3
+*.db
+uploads/
