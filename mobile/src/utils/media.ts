@@ -11,10 +11,29 @@ export async function normalizeImageForUpload(uri: string) {
         { format: ImageManipulator.SaveFormat.JPEG, compress: 0.82 },
       ),
       new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('Görsel hazırlanması çok uzun sürdü. Daha küçük bir fotoğraf seçip tekrar dene.')), 45000);
+        timeoutId = setTimeout(() => reject(new Error('Görsel hazırlama zaman aşımına uğradı.')), 30000);
       }),
     ]);
     return { uri: result.uri, fileName: 'mindmatch-image.jpg', mimeType: 'image/jpeg' };
+  } catch (error) {
+    // 1. Yedek: Yeniden boyutlandırmadan doğrudan JPEG formatına dönüştürmeyi dene
+    try {
+      const fallback = await ImageManipulator.manipulateAsync(
+        uri,
+        [],
+        { format: ImageManipulator.SaveFormat.JPEG, compress: 0.82 },
+      );
+      return { uri: fallback.uri, fileName: 'mindmatch-image.jpg', mimeType: 'image/jpeg' };
+    } catch {
+      // 2. Yedek: Orijinal URI ile devam et
+      const lower = uri.toLowerCase();
+      const isPng = lower.endsWith('.png');
+      return {
+        uri,
+        fileName: isPng ? 'mindmatch-image.png' : 'mindmatch-image.jpg',
+        mimeType: isPng ? 'image/png' : 'image/jpeg'
+      };
+    }
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }

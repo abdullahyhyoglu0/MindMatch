@@ -18,6 +18,9 @@ namespace MindMatch.Application.Dtos.Match
 
         public Guid ReceiverId { get; set; }
 
+        /// <summary>Set once an accepted match has a conversation.</summary>
+        public Guid? ConversationId { get; set; }
+
         public MatchStatus Status { get; set; }
 
         public DateTime CreatedAtUtc { get; set; }

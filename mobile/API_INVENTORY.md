@@ -6,8 +6,8 @@ Mobile API wrappers live in `src/api/mindmatch.ts`; HTTP, bearer token refresh, 
 
 | Flow | Backend API | App surface |
 | --- | --- | --- |
-| Register / sign in / refresh / logout / current user | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me` | Welcome and account form; tokens stored in SecureStore |
-| Password reset request | `POST /api/auth/forgot-password` `{ email }` | Reset request screen; email delivery depends on server SMTP configuration |
+| Register / sign in / refresh / logout / current user | `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout`, `POST /api/auth/logout-all`, `GET /api/auth/me` | Welcome and account form; tokens stored in SecureStore |
+| Password security | `POST /api/auth/forgot-password`, `POST /api/auth/reset-password`, `POST /api/auth/change-password` | Reset request/completion and authenticated password update in settings |
 | Profile and visibility | `GET /api/profiles/me`, `GET /api/profiles/{userId}`, `PUT /api/profiles/me`, `PATCH /api/profiles/me/visibility?isVisible=`, `PUT /api/profiles/me/preferences` | Profile and settings |
 | Photos | `GET /api/profiles/me/photos`, `GET /api/profiles/{userId}/photos`, `POST /api/media?category=1` multipart `file`, `POST /api/profiles/me/photos` `{ mediaAssetId }`, `GET /api/media/{id}` | Profile photo gallery/upload; protected authenticated images |
 | Interests | `GET /api/interests` | Discovery/profile relevance display |
@@ -19,7 +19,7 @@ Mobile API wrappers live in `src/api/mindmatch.ts`; HTTP, bearer token refresh, 
 | Notifications | `GET /api/notifications?pageSize=50`, `POST /api/notifications/{id}/read`, `/read-all` | Notification list and unread tab marker |
 | Premium entitlement | `GET /api/premium/me` | Current membership status and benefits overview |
 | Reports and moderation | `POST /api/reports`, `GET /api/admin/reports?take=50`, `GET /api/admin/reports/{id}`, `POST /api/admin/reports/{id}/assign`, `/resolve`, `POST /api/admin/users/{id}/freeze`, `/activate` | Report flow and role-gated moderation queue |
-| Account | `POST /api/account/freeze`, `POST /api/account/activate` | Account settings |
+| Account | `GET /api/account/status`, `POST /api/account/freeze`, `POST /api/account/activate` | Account settings |
 | Calls/signaling | `POST /api/calls` `{ conversationId, type: 1 audio / 2 video }`, `POST /api/calls/{id}/answer|reject|end`, `GET /api/calls/turn-credentials`, SignalR `/hubs/calls` | Call invitation, answer/reject, end, signaling status |
 
 ## Realtime events
@@ -33,3 +33,4 @@ The messages SignalR hub at `/hubs/messages` invalidates conversation, match, re
 - Call lifecycle and SignalR signaling are integrated, but native WebRTC audio/video peer media is not included in Expo Go. Add a supported WebRTC native package and build a custom Expo development client before claiming live A/V calls.
 - Story creation supports image/video assets. Chat currently exposes text and image attachments; voice/video message upload has not been surfaced in the chat UI.
 - Remote push token registration/delivery is not integrated; notifications currently arrive from the authenticated API polling/SignalR path while the app is running.
+- `GET /api/admin/reports/{id}/media/{mediaId}` returns protected binary evidence. It is deliberately not rendered in the mobile moderator UI until a safe media review experience is specified.

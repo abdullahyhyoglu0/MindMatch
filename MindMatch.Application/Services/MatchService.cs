@@ -236,6 +236,7 @@ public class MatchService : IMatchService
             Id = match.Id,
             RequesterId = match.RequesterId,
             ReceiverId = match.ReceiverId,
+            ConversationId = match.ConversationId,
             Status = match.Status,
             CreatedAtUtc = match.CreatedAtUtc,
             RespondedAtUtc = match.RespondedAtUtc,

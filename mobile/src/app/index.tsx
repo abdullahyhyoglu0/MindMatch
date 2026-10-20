@@ -8,6 +8,7 @@ import { ArrowRight, Eye, EyeOff, Heart, Sparkles } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useSession } from '../state/session';
+import { ApiError } from '../api/client';
 import { colors } from '../theme/tokens';
 import { Button, Field, Wordmark } from '../components/ui';
 
@@ -17,10 +18,11 @@ export default function AuthScreen() {
   const [mode, setMode] = useState<'login'|'register'>('login');
   const [showPassword, setShowPassword] = useState(false);
   const user = useSession(s => s.user); const busy = useSession(s => s.busy); const error = useSession(s => s.error);
-  const signIn = useSession(s => s.signIn); const signUp = useSession(s => s.signUp);
+  const signIn = useSession(s => s.signIn); const reactivate = useSession(s => s.reactivate); const signUp = useSession(s => s.signUp);
   const { control, handleSubmit, formState: { errors } } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { email: '', password: '', displayName: '', nickname: '' } });
   useEffect(() => { if (user) router.replace('/(tabs)'); }, [user]);
-  async function submit(values: FormValues) { await Haptics.selectionAsync(); if (mode === 'register') { const displayName=values.displayName?.trim(); if (!displayName) { Alert.alert('Görünen ad gerekli','Hesap oluşturmak için görünen adını yaz.'); return; } await signUp(values.email.trim(), values.password, displayName, values.nickname?.trim()); } else await signIn(values.email.trim(), values.password); }
+  async function submit(values: FormValues) { await Haptics.selectionAsync(); if (mode === 'register') { const displayName=values.displayName?.trim(); if (!displayName) { Alert.alert('Görünen ad gerekli','Hesap oluşturmak için görünen adını yaz.'); return; } await signUp(values.email.trim(), values.password, displayName, values.nickname?.trim()); } else { try { await signIn(values.email.trim(), values.password); } catch (error) { if (error instanceof ApiError && error.status === 401) Alert.alert('Giriş yapılamadı', 'Hesabını daha önce sen dondurduysan aynı bilgilerle yeniden etkinleştirebilirsin.', [{ text: 'Kapat', style: 'cancel' }, { text: 'Hesabımı etkinleştir', onPress: () => reactivate(values.email.trim(), values.password).catch(() => {}) }]); } }
+  }
   return <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
     <LinearGradient colors={[colors.night, '#3B2E79', '#7162C9']} style={styles.hero}><View style={styles.heroTop}><Wordmark /><View style={styles.heroIcon}><Heart color={colors.white} size={20} fill={colors.coral} /></View></View><View style={styles.orbitOuter}><View style={styles.orbitMiddle}><View style={styles.orbitInner}><Sparkles color="#FFF2C6" size={25} /><Text style={styles.orbitM}>m</Text></View></View></View><Text style={styles.heroEyebrow}>DUYGULARININ FREKANSINDA</Text><Text style={styles.heroTitle}>Aynı histe{'\n'}buluşalım.</Text><Text style={styles.heroCopy}>Ruh hâline yakın insanlarla, daha anlamlı tanışmalar.</Text><View style={styles.heroDots}><View/><View/><View/></View></LinearGradient>
     <View style={styles.formCard}><Text style={styles.kicker}>MINDMATCH’E HOŞ GELDİN</Text><Text style={styles.formTitle}>{mode === 'login' ? 'Tekrar merhaba' : 'Hikâyen burada başlasın'}</Text><Text style={styles.formCopy}>{mode === 'login' ? 'Sana yakın hislerle kaldığın yerden devam et.' : 'Bir hesap oluştur, kendi ritmini keşfet.'}</Text>

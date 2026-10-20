@@ -1,67 +1,960 @@
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { router } from 'expo-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowRight, Bell, ChevronLeft, ChevronRight, Heart, MapPin, RotateCw, Sparkles, X } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
-import { discoveryApi, interestApi, profileApi } from '../../api/mindmatch';
-import { ApiError } from '../../api/client';
-import type { Mood, Profile } from '../../api/types';
-import { useSession } from '../../state/session';
-import { Button, Card, Chip, Empty, Loading, ProtectedImage, Screen, SectionLabel } from '../../components/ui';
-import { colors } from '../../theme/tokens';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Bell,
+  ChevronRight,
+  Crown,
+  Filter,
+  Lock,
+  MapPin,
+  MessageCircle,
+  RotateCw,
+  Search,
+  Send,
+  SlidersHorizontal,
+  Sparkles,
+  UserCheck,
+  X,
+} from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
+import { chatApi, discoveryApi, interestApi, premiumApi, profileApi, storyApi } from '../../api/mindmatch';
+import type { Profile, Story } from '../../api/types';
+import { useSession } from '../../state/session';
+import { Avatar, Button, Card, Empty, Loading, ProtectedImage, Screen } from '../../components/ui';
+import { colors } from '../../theme/tokens';
 
-const moods=[[1,'Neşeli','☀'],[2,'Hüzünlü','☁'],[3,'Stresli','〰'],[4,'Yalnız','♡'],[5,'Sakin','☾'],[6,'Endişeli','◌'],[7,'Heyecanlı','✦'],[8,'Yorgun','◡'],[9,'Nötr','—']] as const;
-const energies=[[1,'Düşük'],[2,'Orta'],[3,'Yüksek']] as const;
-const conversations=[[1,'İçimi dökmek'],[2,'Tavsiye almak'],[3,'Eğlenmek'],[4,'Derin sohbet'],[5,'Günlük sohbet'],[6,'Yeni arkadaşlık'],[7,'Dinlenmek']] as const;
-function ChoiceGroup({title,items,value,onChange,columns=3}:{title:string;items:readonly (readonly [number,string,...unknown[]])[];value:number|null;onChange:(x:number)=>void;columns?:number}) { return <View style={styles.choiceGroup}><Text style={styles.choiceTitle}>{title}</Text><View style={styles.choices}>{items.map(([id,label,icon])=><Pressable key={id} onPress={()=>onChange(id)} style={[styles.choice,value===id&&styles.choiceSelected,{minWidth:columns===3?'30%':'47%'}]}><Text style={[styles.choiceIcon,value===id&&{color:colors.violet}]}>{typeof icon==='string'?icon:'✦'}</Text><Text style={[styles.choiceLabel,value===id&&styles.choiceLabelSelected]}>{label}</Text></Pressable>)}</View></View>; }
-function MoodSetup({onDone,initial}:{onDone:()=>void;initial?:Mood}) {
- const [mood,setMood]=useState<number|null>(initial?.mood||null);const[energy,setEnergy]=useState<number|null>(initial?.energy||null);const[desire,setDesire]=useState<number|null>(initial?.desiredConversation||null);
- const qc=useQueryClient(); const save=useMutation({mutationFn:()=>discoveryApi.checkIn(mood!,energy!,desire!),onSuccess:v=>{qc.setQueryData(['mood'],v);Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);onDone();},onError:e=>Alert.alert('Kaydedilemedi',e instanceof Error?e.message:'Tekrar dene.')});
- return <View style={styles.moodPage}><View style={styles.moodOrb}><Text style={{fontSize:32}}>☼</Text></View><Text style={styles.kicker}>BUGÜNÜN CHECK-IN’İ</Text><Text style={styles.moodTitle}>Şu an nasılsın?</Text><Text style={styles.moodDesc}>Seçimlerin iki saat boyunca sana yakın keşif önerileri sunar.</Text><ChoiceGroup title="Ruh hâlin" items={moods} value={mood} onChange={setMood}/><ChoiceGroup title="Enerjin" items={energies} value={energy} onChange={setEnergy} columns={2}/><ChoiceGroup title="Nasıl bir sohbet istersin?" items={conversations} value={desire} onChange={setDesire} columns={2}/><Text style={styles.privacyHint}>Bu, senin seçtiğin check-in. Uygulama duygularını otomatik olarak analiz etmez.</Text><Button title="Keşfi başlat" onPress={()=>save.mutate()} disabled={!mood||!energy||!desire} loading={save.isPending} icon={<ArrowRight color={colors.white} size={18}/>} /></View>;
-}
-function DiscoverCard({person,onSkip,onLike,likeBusy}:{person:Profile;onSkip:()=>void;onLike:()=>void;likeBusy:boolean}) {
- const photos=useQuery({queryKey:['photos',person.userId],queryFn:()=>profileApi.photos(person.userId)});
- const [photoIndex,setPhotoIndex]=useState<number|null>(null);
- const photoList=photos.data||[];
- const primaryIndex=Math.max(0,photoList.findIndex(x=>x.isPrimary));
- const activeIndex=photoIndex??primaryIndex;
- const activePhoto=photoList[activeIndex];
- function changePhoto(direction:number){if(!photoList.length)return;setPhotoIndex(index=>((index??primaryIndex)+direction+photoList.length)%photoList.length);}
- return <View style={styles.personCard}>
-   <View style={styles.personHero}>
-     {activePhoto?<ProtectedImage mediaAssetId={activePhoto.mediaAssetId} style={StyleSheet.absoluteFill}/>:<LinearGradient colors={['#B9AAFF','#E9DFFF','#F9CED5']} style={StyleSheet.absoluteFill}><View style={styles.heroFallback}><Text style={styles.heroInitial}>{person.displayName.slice(0,1).toUpperCase()}</Text><View style={styles.heroRing}/></View></LinearGradient>}
-     <LinearGradient pointerEvents="none" colors={['#17132912','transparent','#171329D9']} locations={[0,.42,1]} style={StyleSheet.absoluteFill}/>
-     <View style={styles.heroTop}><Chip tone="violet">✦ SENİN FREKANSIN</Chip><Pressable style={styles.skipCircle} accessibilityLabel="Profili geç" onPress={onSkip}><X size={20} color={colors.ink}/></Pressable></View>
-     {photoList.length>1?<><Pressable style={[styles.photoArrow,styles.photoArrowLeft]} onPress={()=>changePhoto(-1)}><ChevronLeft size={20} color={colors.white}/></Pressable><Pressable style={[styles.photoArrow,styles.photoArrowRight]} onPress={()=>changePhoto(1)}><ChevronRight size={20} color={colors.white}/></Pressable><View style={styles.photoDots}>{photoList.map((photo,i)=><View key={photo.id} style={[styles.photoDot,i===activeIndex&&styles.photoDotActive]}/>)}</View></>:null}
-     <View style={styles.personCaption}><Text style={styles.personName}>{person.displayName}{person.age?`, ${person.age}`:''}</Text>{person.city?<View style={styles.location}><MapPin size={13} color="#fff"/><Text style={styles.locationText}>{person.city}</Text></View>:null}</View>
-   </View>
-   <View style={styles.personBody}><Text style={styles.nickname}>@{person.nickname||'mindmatch'}</Text><Text style={styles.bio}>{person.bio||'Henüz biyografi eklememiş.'}</Text><Pressable accessibilityRole="button" onPress={()=>router.push({pathname:'/user/[id]',params:{id:person.userId}})} style={{alignSelf:'flex-start',marginTop:8}}><Text style={{fontSize:11,color:colors.violet,fontWeight:'800'}}>Profili görüntüle →</Text></Pressable><View style={styles.reasonWrap}>{person.discoveryReasons?.slice(0,3).map((reason,i)=><Chip key={`${reason}${i}`}>{reason}</Chip>)}</View>
-     <View style={styles.cardActions}><Pressable accessibilityLabel="Bu profili geç" onPress={onSkip} style={[styles.roundAction,styles.skipAction]}><X size={21} color={colors.muted}/></Pressable><View style={styles.actionHint}><Text style={styles.actionHintTitle}>Bir bağ kurmaya hazır mısın?</Text><Text style={styles.actionHintCopy}>Karşılıklı ilgiyle sohbet açılır.</Text></View><Pressable accessibilityLabel="Tanışma isteği gönder" onPress={onLike} disabled={likeBusy} style={[styles.roundAction,styles.likeAction,likeBusy&&{opacity:.6}]}>{likeBusy?<ActivityIndicator color={colors.white}/>:<Heart size={22} color={colors.white} fill={colors.white}/>}</Pressable></View>
-   </View>
- </View>;
-}
+const POPULAR_CITIES = ['Tümü', 'İstanbul', 'Ankara', 'İzmir', 'Antalya', 'Bursa', 'Eskişehir'];
 
 export default function DiscoverScreen() {
- const user=useSession(s=>s.user);const qc=useQueryClient();
- const moodQuery=useQuery({queryKey:['mood'],queryFn:async()=>{try{return await discoveryApi.mood()}catch(e){if(e instanceof ApiError&&e.status===404)return null;throw e}},enabled:!!user});
- const mood=moodQuery.data;
- const {data:discovery,isLoading,refetch}=useQuery({queryKey:['discovery'],queryFn:()=>discoveryApi.list(),enabled:!!mood&&!mood.isExpired,refetchInterval:60_000});
- const interests=useQuery({queryKey:['interests'],queryFn:interestApi.list,enabled:!!mood&&!mood.isExpired});
- const ids=useMemo(()=>new Map((interests.data||[]).map(i=>[i.id,i.name])),[interests.data]);
- const skip=useMutation({mutationFn:discoveryApi.skip,onSuccess:()=>{Haptics.selectionAsync();refetch()}});
- const like=useMutation({mutationFn:async(id:string)=>{const result=await discoveryApi.match(id);await discoveryApi.seen(id).catch(()=>{});return result},onSuccess:()=>{Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);qc.invalidateQueries({queryKey:['matches']});refetch();Alert.alert('İstek gönderildi','Karşı taraf yanıt verdiğinde sana haber vereceğiz.')},onError:e=>Alert.alert('İstek gönderilemedi',e instanceof Error?e.message:'Tekrar dene.')});
- if(moodQuery.isLoading)return <Screen><Loading label="Sana özel keşif hazırlanıyor"/></Screen>;
- if(moodQuery.error)return <Screen scroll><View style={styles.topLine}><View><Text style={styles.kicker}>MINDMATCH · KEŞFET</Text><Text style={styles.helloTitle}>Bugün kiminle{ '\n' }aynı frekanstasın?</Text></View><Pressable onPress={()=>router.push('/(tabs)/notifications')} style={styles.bell}><Bell size={20} color={colors.ink}/></Pressable></View><Card style={{marginTop:24}}><Text style={styles.errorHeading}>Bağlantı kurulamadı</Text><Text style={styles.errorCopy}>{moodQuery.error instanceof Error?moodQuery.error.message:'API bağlantısını kontrol et.'}</Text><Button title="Yeniden dene" onPress={()=>moodQuery.refetch()} style={{marginTop:14}}/></Card></Screen>;
- return <Screen scroll><View style={styles.topLine}><View><Text style={styles.kicker}>MINDMATCH · KEŞFET</Text><Text style={styles.helloTitle}>Bugün kiminle{ '\n' }<Text style={{color:colors.violet}}>aynı frekanstasın?</Text></Text></View><Pressable onPress={()=>router.push('/(tabs)/notifications')} style={styles.bell}><Bell size={20} color={colors.ink}/></Pressable></View>
- {(!mood||mood.isExpired)?<MoodSetup initial={mood||undefined} onDone={()=>{qc.invalidateQueries({queryKey:['discovery']})}}/>:<>
- <View style={styles.moodRibbon}><View style={styles.moodRibbonIcon}><Sparkles size={16} color={colors.violet}/></View><View style={{flex:1}}><Text style={styles.moodRibbonTitle}>Bugünkü ritmin hazır</Text><Text style={styles.moodRibbonText}>Seçimlerine göre yeni bağlantılar.</Text></View><Pressable onPress={()=>qc.setQueryData(['mood'],null)}><Text style={styles.changeMood}>Değiştir</Text></Pressable></View>
- <View style={styles.sectionHead}><SectionLabel>Senin için</SectionLabel><Pressable style={styles.refresh} onPress={()=>refetch()}><RotateCw size={15} color={colors.violet}/></Pressable></View>
- {isLoading?<Card style={styles.loadingCard}><ActivityIndicator color={colors.violet}/><Text style={styles.loadingCopy}>Aynı frekanstaki kişiler aranıyor…</Text></Card>:discovery?.items?.length?<><DiscoverCard person={discovery.items[0]} onSkip={()=>skip.mutate(discovery.items[0].userId)} onLike={()=>like.mutate(discovery.items[0].userId)} likeBusy={like.isPending}/>{discovery.items[0].interestIds?.length?<><SectionLabel>Ortak ilgi alanları</SectionLabel><View style={styles.interestRow}>{discovery.items[0].interestIds.slice(0,6).map(id=><Chip key={id}>{ids.get(id)||'İlgi alanı'}</Chip>)}</View></>:null}{discovery.items.length>1?<Text style={styles.moreHint}>+{discovery.items.length-1} kişi daha keşfinde</Text>:null}</>:<Card><Empty icon="✦" title="Şimdilik yeni biri yok" detail="Daha sonra tekrar bak; yeni profiller geldikçe burada görünür." action={<Button title="Yeniden dene" variant="soft" onPress={()=>refetch()} style={{marginTop:17}}/>}/></Card>}
- <SectionLabel action={<Pressable onPress={()=>router.push('/premium')}><Text style={styles.premiumLink}>Premium’u keşfet ↗</Text></Pressable>}>Biraz daha keşfet</SectionLabel><Card style={styles.premiumCard}><View style={styles.premiumStar}><Sparkles size={18} color="#FFF3C7" fill="#FFF3C7"/></View><View style={{flex:1}}><Text style={styles.premiumTitle}>Bağlantılarına alan aç</Text><Text style={styles.premiumText}>Premium avantajlarını ve durumunu gör.</Text></View><ChevronRight size={19} color={colors.violet}/></Card>
- </>}</Screen>;
+  const user = useSession(s => s.user);
+  const qc = useQueryClient();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCity, setSelectedCity] = useState('Tümü');
+  const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [minAge, setMinAge] = useState('18');
+  const [maxAge, setMaxAge] = useState('35');
+  const [genderFilter, setGenderFilter] = useState<'all' | 'female' | 'male'>('all');
+
+  // Quick message modal for new chats
+  const [activeNewChatTarget, setActiveNewChatTarget] = useState<Profile | null>(null);
+  const [firstMessageText, setFirstMessageText] = useState('Merhaba! 👋');
+
+  // Premium status check
+  const premiumQuery = useQuery({ queryKey: ['premium'], queryFn: premiumApi.mine });
+  const isPremium = Boolean(premiumQuery.data?.isPremium);
+
+  // Fetch public profiles directly (No mood blocker)
+  const {
+    data: discovery,
+    isLoading,
+    isRefetching,
+    refetch,
+  } = useQuery({
+    queryKey: ['discovery', selectedCity],
+    queryFn: () => discoveryApi.list(1, 50, selectedCity === 'Tümü' ? undefined : selectedCity),
+    refetchInterval: 60_000,
+  });
+
+  // Fetch active stories to identify who has stories
+  const storiesQuery = useQuery({
+    queryKey: ['stories'],
+    queryFn: storyApi.feed,
+    refetchInterval: 20_000,
+  });
+
+  const storiesByUser = useMemo(() => {
+    const map = new Map<string, Story[]>();
+    for (const story of storiesQuery.data ?? []) {
+      const list = map.get(story.userId) || [];
+      list.push(story);
+      map.set(story.userId, list);
+    }
+    return map;
+  }, [storiesQuery.data]);
+
+  // Existing conversations map
+  const conversationsQuery = useQuery({
+    queryKey: ['conversations'],
+    queryFn: chatApi.conversations,
+  });
+
+  const convMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const conv of conversationsQuery.data ?? []) {
+      map.set(conv.otherUserId, conv.id);
+    }
+    return map;
+  }, [conversationsQuery.data]);
+
+  // Interests map
+  const interestsQuery = useQuery({ queryKey: ['interests'], queryFn: interestApi.list });
+  const interestNames = useMemo(
+    () => new Map((interestsQuery.data ?? []).map(i => [i.id, i.name])),
+    [interestsQuery.data]
+  );
+
+  // Filter profiles based on Search and Premium age/gender filters
+  const filteredProfiles = useMemo(() => {
+    let list = discovery?.items ?? [];
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter(
+        p =>
+          p.displayName.toLowerCase().includes(q) ||
+          p.nickname?.toLowerCase().includes(q) ||
+          p.city?.toLowerCase().includes(q) ||
+          p.bio?.toLowerCase().includes(q)
+      );
+    }
+
+    if (isPremium) {
+      const min = parseInt(minAge, 10);
+      const max = parseInt(maxAge, 10);
+      if (!isNaN(min)) list = list.filter(p => !p.age || p.age >= min);
+      if (!isNaN(max)) list = list.filter(p => !p.age || p.age <= max);
+      if (genderFilter === 'female') list = list.filter(p => p.gender === 1);
+      if (genderFilter === 'male') list = list.filter(p => p.gender === 2);
+    }
+
+    return list;
+  }, [discovery?.items, searchQuery, isPremium, minAge, maxAge, genderFilter]);
+
+  // Fetch primary profile photos for each person to show real photos instead of "D" letter
+  const personPhotoQueries = useQueries({
+    queries: (filteredProfiles ?? []).map(p => ({
+      queryKey: ['profile-photos', p.userId],
+      queryFn: () => profileApi.photos(p.userId),
+      staleTime: 60_000,
+    })),
+  });
+
+  const primaryPhotoMap = useMemo(() => {
+    const map = new Map<string, string>();
+    filteredProfiles.forEach((p, idx) => {
+      const photos = personPhotoQueries[idx]?.data;
+      const primary = photos?.find(x => x.isPrimary) ?? photos?.[0];
+      if (primary?.mediaAssetId) {
+        map.set(p.userId, primary.mediaAssetId);
+      }
+    });
+    return map;
+  }, [filteredProfiles, personPhotoQueries]);
+
+  // Handle sending initial message request to start a conversation
+  const startConversation = useMutation({
+    mutationFn: async ({ recipientId, text }: { recipientId: string; text: string }) => {
+      return chatApi.sendRequest(recipientId, text);
+    },
+    onSuccess: (req, variables) => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      const target = activeNewChatTarget;
+      setActiveNewChatTarget(null);
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+      if (req.conversationId) {
+        router.push({
+          pathname: '/conversation/[id]',
+          params: {
+            id: req.conversationId,
+            userId: variables.recipientId,
+            name: target?.displayName || 'Kullanıcı',
+          },
+        });
+      } else {
+        Alert.alert('Mesaj İsteği Gönderildi', 'Kullanıcı onayladığında sohbet aktif olacak.');
+      }
+    },
+    onError: (error: any) => {
+      Alert.alert('Sohbet Başlatılamadı', error instanceof Error ? error.message : 'Lütfen tekrar dene.');
+    },
+  });
+
+  // Tapping the card body (to the right of the avatar): opens chat screen!
+  function handleCardBodyPress(person: Profile) {
+    Haptics.selectionAsync().catch(() => {});
+    const existingConvId = convMap.get(person.userId);
+    if (existingConvId) {
+      // Existing conversation -> opens directly!
+      router.push({
+        pathname: '/conversation/[id]',
+        params: { id: existingConvId, userId: person.userId, name: person.displayName },
+      });
+    } else {
+      // No conversation yet -> opens quick message dialog to start chat!
+      setActiveNewChatTarget(person);
+      setFirstMessageText('Merhaba! 👋');
+    }
+  }
+
+  // Tapping the Avatar: if has stories -> opens story; if not -> opens profile!
+  function handleAvatarPress(person: Profile) {
+    Haptics.selectionAsync().catch(() => {});
+    const userStories = storiesByUser.get(person.userId);
+    if (userStories && userStories.length > 0) {
+      // Has active stories -> open story viewer directly!
+      router.push({
+        pathname: '/story/[id]',
+        params: { id: userStories[0].id, userId: person.userId },
+      });
+    } else {
+      // No stories -> open user profile!
+      router.push({ pathname: '/user/[id]', params: { id: person.userId } });
+    }
+  }
+
+  return (
+    <Screen scroll style={styles.screen}>
+      {/* Top Header */}
+      <View style={styles.topHeader}>
+        <View>
+          <Text style={styles.eyebrow}>MINDMATCH · KEŞFET</Text>
+          <Text style={styles.title}>
+            Açık <Text style={{ color: colors.violet }}>Profiller</Text>
+          </Text>
+        </View>
+
+        <View style={styles.topHeaderActions}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Yenile"
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
+              refetch();
+            }}
+            style={styles.iconCircle}
+          >
+            <RotateCw size={18} color={colors.ink} />
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Bildirimler"
+            onPress={() => router.push('/(tabs)/notifications')}
+            style={styles.iconCircle}
+          >
+            <Bell size={18} color={colors.ink} />
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Search Bar + Filter Trigger */}
+      <View style={styles.searchRow}>
+        <View style={styles.searchInputWrap}>
+          <Search size={18} color={colors.muted} style={{ marginLeft: 12 }} />
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="İsim, şehir veya ilgi alanı ara…"
+            placeholderTextColor={colors.muted}
+            style={styles.searchInput}
+          />
+          {searchQuery.length > 0 && (
+            <Pressable onPress={() => setSearchQuery('')} style={{ padding: 8 }}>
+              <X size={16} color={colors.muted} />
+            </Pressable>
+          )}
+        </View>
+
+        <Pressable
+          style={[styles.filterBtn, isPremium && styles.filterBtnPremium]}
+          onPress={() => setFilterModalVisible(true)}
+        >
+          <SlidersHorizontal size={18} color={isPremium ? colors.white : colors.ink} />
+        </Pressable>
+      </View>
+
+      {/* City Chips Row */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.cityChipsRow}
+      >
+        {POPULAR_CITIES.map(city => {
+          const selected = selectedCity === city;
+          return (
+            <Pressable
+              key={city}
+              onPress={() => {
+                Haptics.selectionAsync().catch(() => {});
+                setSelectedCity(city);
+              }}
+              style={[styles.cityChip, selected && styles.cityChipSelected]}
+            >
+              <Text style={[styles.cityChipText, selected && styles.cityChipTextSelected]}>
+                {city}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      {/* Section Subtitle & Count */}
+      <View style={styles.feedCountRow}>
+        <Text style={styles.feedSectionLabel}>Keşfedilecek Kişiler</Text>
+        <Text style={styles.feedCountText}>
+          {filteredProfiles.length} kişi aktif
+        </Text>
+      </View>
+
+      {/* Profiles Feed: Clean WhatsApp / Telegram List Item without text box */}
+      {isLoading ? (
+        <Card style={styles.loadingCard}>
+          <ActivityIndicator color={colors.violet} size="large" />
+          <Text style={styles.loadingText}>Açık profiller yükleniyor…</Text>
+        </Card>
+      ) : filteredProfiles.length > 0 ? (
+        <View style={styles.profilesFeed}>
+          {filteredProfiles.map(person => {
+            const hasExistingChat = convMap.has(person.userId);
+            const userStories = storiesByUser.get(person.userId);
+            const hasStories = Boolean(userStories && userStories.length > 0);
+            const photoAssetId = primaryPhotoMap.get(person.userId);
+
+            return (
+              <Card key={person.userId} style={styles.profileRowCard}>
+                <View style={styles.cardContentRow}>
+                  {/* Left Side: Avatar with burning/flaming story ring if stories exist */}
+                  <Pressable
+                    onPress={() => handleAvatarPress(person)}
+                    style={styles.avatarContainer}
+                  >
+                    {hasStories ? (
+                      <LinearGradient
+                        colors={['#FF007A', '#FF4500', '#FFD600', '#FF0055']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.flamingStoryRing}
+                      >
+                        <View style={styles.flamingInner}>
+                          <Avatar
+                            name={person.displayName}
+                            mediaAssetId={photoAssetId}
+                            size={56}
+                          />
+                        </View>
+                        <View style={styles.flameBadge}>
+                          <Sparkles size={10} color="#FFF" />
+                        </View>
+                      </LinearGradient>
+                    ) : (
+                      <View style={styles.normalAvatarRing}>
+                        <Avatar
+                          name={person.displayName}
+                          mediaAssetId={photoAssetId}
+                          size={56}
+                        />
+                      </View>
+                    )}
+                    <View style={styles.onlineDot} />
+                  </Pressable>
+
+                  {/* Right Side: Tapping the card body opens the chat screen directly! */}
+                  <Pressable
+                    onPress={() => handleCardBodyPress(person)}
+                    style={styles.cardBodyRight}
+                  >
+                    <View style={styles.topInfoRow}>
+                      <View style={styles.nameRow}>
+                        <Text style={styles.nameText} numberOfLines={1}>
+                          {person.displayName}
+                        </Text>
+                        {person.isVerified && (
+                          <UserCheck size={14} color={colors.violet} />
+                        )}
+                        {(person.age || person.city) && (
+                          <View style={styles.ageCityBadge}>
+                            <Text style={styles.ageCityText}>
+                              {person.age ? `${person.age}` : ''}
+                              {person.age && person.city ? ' · ' : ''}
+                              {person.city || ''}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      {hasExistingChat && (
+                        <View style={styles.activeChatBadge}>
+                          <Text style={styles.activeChatText}>Sohbette</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    <Text style={styles.nicknameText}>@{person.nickname || 'mindmatch'}</Text>
+
+                    <Text style={styles.statusQuote} numberOfLines={2}>
+                      {person.bio || 'Merhaba! MindMatch’te tanışmak ve sohbet etmek için mesaj atabilirsin.'}
+                    </Text>
+
+                    {person.interestIds?.length > 0 && (
+                      <View style={styles.tagWrap}>
+                        {person.interestIds.slice(0, 3).map(id => (
+                          <View key={id} style={styles.tagPill}>
+                            <Text style={styles.tagPillText}>#{interestNames.get(id) || 'İlgi'}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+
+                    {/* Action Prompt */}
+                    <View style={styles.chatActionHint}>
+                      <MessageCircle size={14} color={colors.violet} />
+                      <Text style={styles.chatActionHintText}>
+                        {hasExistingChat ? 'Sohbete Devam Et' : 'Sohbet Başlat'}
+                      </Text>
+                      <ChevronRight size={14} color={colors.muted} />
+                    </View>
+                  </Pressable>
+                </View>
+              </Card>
+            );
+          })}
+        </View>
+      ) : (
+        <Card style={styles.emptyWrap}>
+          <Empty
+            icon="✦"
+            title="Aradığın kriterlerde kimse bulunamadı"
+            detail="Farklı bir arama kelimesi veya şehir deneyebilirsin."
+            action={
+              <Button
+                title="Tüm Profilleri Gör"
+                onPress={() => {
+                  setSearchQuery('');
+                  setSelectedCity('Tümü');
+                }}
+                style={{ marginTop: 14 }}
+              />
+            }
+          />
+        </Card>
+      )}
+
+      {/* Start New Chat Modal (Opened when tapping a user who has no existing conversation) */}
+      <Modal
+        visible={Boolean(activeNewChatTarget)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setActiveNewChatTarget(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setActiveNewChatTarget(null)} />
+          <View style={styles.chatModalContent}>
+            <View style={styles.modalGrabber} />
+
+            <View style={styles.chatModalHeader}>
+              <Avatar
+                name={activeNewChatTarget?.displayName || 'Kullanıcı'}
+                mediaAssetId={activeNewChatTarget ? primaryPhotoMap.get(activeNewChatTarget.userId) : undefined}
+                size={52}
+              />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.chatModalTitle}>{activeNewChatTarget?.displayName}</Text>
+                <Text style={styles.chatModalSub}>İlk mesajını gönder ve sohbeti başlat</Text>
+              </View>
+              <Pressable onPress={() => setActiveNewChatTarget(null)}>
+                <X size={20} color={colors.muted} />
+              </Pressable>
+            </View>
+
+            <TextInput
+              value={firstMessageText}
+              onChangeText={setFirstMessageText}
+              placeholder="İlk mesajını yaz…"
+              placeholderTextColor={colors.muted}
+              multiline
+              maxLength={400}
+              style={styles.chatModalInput}
+            />
+
+            <View style={styles.chatModalButtons}>
+              <Button
+                title="Profili Gör"
+                variant="outline"
+                onPress={() => {
+                  const uid = activeNewChatTarget?.userId;
+                  setActiveNewChatTarget(null);
+                  if (uid) router.push({ pathname: '/user/[id]', params: { id: uid } });
+                }}
+                style={{ flex: 1 }}
+              />
+              <Button
+                title="Sohbeti Başlat"
+                icon={<Send size={16} color={colors.white} />}
+                loading={startConversation.isPending}
+                disabled={!firstMessageText.trim()}
+                onPress={() => {
+                  if (activeNewChatTarget) {
+                    startConversation.mutate({
+                      recipientId: activeNewChatTarget.userId,
+                      text: firstMessageText.trim(),
+                    });
+                  }
+                }}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Filter Bottom Sheet Modal */}
+      <Modal
+        visible={filterModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setFilterModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setFilterModalVisible(false)} />
+          <View style={styles.modalContent}>
+            <View style={styles.modalGrabber} />
+
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <SlidersHorizontal size={20} color={colors.violet} />
+                <Text style={styles.modalHeaderTitle}>Keşif Filtreleri</Text>
+              </View>
+              <Pressable onPress={() => setFilterModalVisible(false)}>
+                <X size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+
+            {/* Free Filters: City Selection */}
+            <Text style={styles.modalSectionLabel}>ŞEHİR FİLTRESİ (Ücretsiz)</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {POPULAR_CITIES.map(city => (
+                  <Pressable
+                    key={city}
+                    onPress={() => setSelectedCity(city)}
+                    style={[
+                      styles.cityChip,
+                      selectedCity === city && styles.cityChipSelected,
+                    ]}
+                  >
+                    <Text style={[styles.cityChipText, selectedCity === city && styles.cityChipTextSelected]}>
+                      {city}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
+
+            {/* Premium Gated Filters: Age & Gender */}
+            <View style={styles.premiumBox}>
+              <View style={styles.premiumBoxHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Crown size={18} color="#E5A100" />
+                  <Text style={styles.premiumBoxTitle}>Yaş & Tercih Filtreleri</Text>
+                </View>
+                {!isPremium && (
+                  <View style={styles.premiumLockBadge}>
+                    <Lock size={12} color="#E5A100" />
+                    <Text style={styles.premiumLockText}>PREMIUM</Text>
+                  </View>
+                )}
+              </View>
+
+              {!isPremium ? (
+                <View style={styles.premiumLockNotice}>
+                  <Text style={styles.premiumLockDesc}>
+                    Yaş aralığı ve cinsiyet gibi detaylı arama parametreleri Premium üyelere özeldir.
+                  </Text>
+                  <Button
+                    title="Premium'a Yükselt 👑"
+                    onPress={() => {
+                      setFilterModalVisible(false);
+                      router.push('/premium');
+                    }}
+                    style={{ marginTop: 12 }}
+                  />
+                </View>
+              ) : (
+                <View style={styles.premiumActiveControls}>
+                  <Text style={styles.inputLabel}>Minimum Yaş: {minAge}</Text>
+                  <TextInput
+                    value={minAge}
+                    onChangeText={setMinAge}
+                    keyboardType="number-pad"
+                    style={styles.numberInput}
+                    placeholder="18"
+                  />
+
+                  <Text style={[styles.inputLabel, { marginTop: 12 }]}>Maksimum Yaş: {maxAge}</Text>
+                  <TextInput
+                    value={maxAge}
+                    onChangeText={setMaxAge}
+                    keyboardType="number-pad"
+                    style={styles.numberInput}
+                    placeholder="40"
+                  />
+
+                  <View style={{ marginTop: 14 }}>
+                    <Text style={styles.inputLabel}>Cinsiyet Tercihi</Text>
+                    <View style={styles.genderRow}>
+                      {(['all', 'female', 'male'] as const).map(g => (
+                        <Pressable
+                          key={g}
+                          onPress={() => setGenderFilter(g)}
+                          style={[
+                            styles.genderChip,
+                            genderFilter === g && styles.genderChipSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.genderChipText,
+                              genderFilter === g && styles.genderChipTextSelected,
+                            ]}
+                          >
+                            {g === 'all' ? 'Tümü' : g === 'female' ? 'Kadın' : 'Erkek'}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
+
+            <Button
+              title="Filtreleri Uygula"
+              onPress={() => setFilterModalVisible(false)}
+              style={{ marginTop: 18 }}
+            />
+          </View>
+        </View>
+      </Modal>
+    </Screen>
+  );
 }
-const styles=StyleSheet.create({topLine:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',marginBottom:16},kicker:{color:colors.violet,fontSize:9,fontWeight:'900',letterSpacing:1.4,marginBottom:7},helloTitle:{fontSize:28,lineHeight:32,fontWeight:'900',letterSpacing:-1,color:colors.ink},bell:{width:43,height:43,borderRadius:15,backgroundColor:colors.white,borderWidth:1,borderColor:colors.line,alignItems:'center',justifyContent:'center'},moodPage:{backgroundColor:colors.white,borderWidth:1,borderColor:colors.line,borderRadius:25,padding:19,marginTop:8,marginBottom:20},moodOrb:{width:55,height:55,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:'#FFF4D8',marginBottom:15},moodTitle:{fontSize:25,color:colors.ink,fontWeight:'900',letterSpacing:-.8},moodDesc:{fontSize:12,color:colors.muted,lineHeight:18,marginTop:5},choiceGroup:{marginTop:21},choiceTitle:{fontSize:13,fontWeight:'800',color:colors.ink,marginBottom:10},choices:{flexDirection:'row',flexWrap:'wrap',gap:7},choice:{height:41,paddingHorizontal:8,backgroundColor:colors.canvas,borderWidth:1,borderColor:colors.line,borderRadius:13,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:5},choiceSelected:{backgroundColor:colors.paleViolet,borderColor:colors.violet},choiceIcon:{fontSize:13,color:colors.muted},choiceLabel:{fontSize:10,color:colors.muted,fontWeight:'700'},choiceLabelSelected:{color:colors.violet},privacyHint:{fontSize:10,color:colors.muted,lineHeight:15,marginTop:17,marginBottom:14},moodRibbon:{flexDirection:'row',alignItems:'center',gap:10,backgroundColor:colors.paleViolet,borderRadius:16,padding:12,marginTop:3},moodRibbonIcon:{width:34,height:34,borderRadius:12,backgroundColor:colors.white,alignItems:'center',justifyContent:'center'},moodRibbonTitle:{fontSize:11,color:colors.ink,fontWeight:'800'},moodRibbonText:{fontSize:10,color:colors.muted,marginTop:3},changeMood:{fontSize:10,color:colors.violet,fontWeight:'800',padding:5},sectionHead:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},refresh:{width:34,height:34,borderRadius:12,alignItems:'center',justifyContent:'center',backgroundColor:colors.white,borderWidth:1,borderColor:colors.line},personCard:{borderRadius:25,overflow:'hidden',backgroundColor:colors.white,borderWidth:1,borderColor:colors.line,elevation:3,shadowColor:colors.night,shadowOpacity:.05,shadowRadius:17,marginBottom:18},personHero:{height:390,backgroundColor:'#DCD5FF',overflow:'hidden',justifyContent:'flex-end'},heroFallback:{flex:1,alignItems:'center',justifyContent:'center',backgroundColor:'#DCD5FF'},heroInitial:{position:"absolute",fontSize:190,fontWeight:'900',color:'#FFFFFF5C',marginTop:-25},heroRing:{position:'absolute',height:235,width:235,borderRadius:120,borderWidth:1,borderColor:'#FFFFFF6E'},heroTop:{position:'absolute',top:14,left:14,right:14,flexDirection:'row',justifyContent:'space-between',alignItems:'center'},skipCircle:{height:38,width:38,borderRadius:14,backgroundColor:'#FFFFFFE6',alignItems:'center',justifyContent:'center'},personCaption:{padding:17,paddingTop:54,backgroundColor:"transparent"},personName:{fontSize:26,fontWeight:'900',letterSpacing:-.8,color:colors.white},location:{flexDirection:'row',alignItems:'center',gap:5,marginTop:5},locationText:{fontSize:11,color:'#FFFFFFE8'},personBody:{padding:17},nickname:{fontSize:11,color:colors.violet,fontWeight:'800'},bio:{fontSize:13,color:colors.ink,lineHeight:19,marginTop:7},reasonWrap:{flexDirection:'row',flexWrap:'wrap',gap:6,marginTop:12},cardActions:{flexDirection:"row",alignItems:"center",gap:10,marginTop:17},roundAction:{width:52,height:52,borderRadius:20,alignItems:"center",justifyContent:"center",borderWidth:1},skipAction:{backgroundColor:colors.white,borderColor:colors.line},likeAction:{backgroundColor:colors.coral,borderColor:colors.coral},actionHint:{flex:1,alignItems:"center"},actionHintTitle:{fontSize:10,color:colors.ink,fontWeight:"800",textAlign:"center"},actionHintCopy:{fontSize:8,color:colors.muted,marginTop:3,textAlign:"center"},photoArrow:{position:"absolute",top:"48%",zIndex:2,width:33,height:33,borderRadius:17,backgroundColor:"#17132988",alignItems:"center",justifyContent:"center"},photoArrowLeft:{left:10},photoArrowRight:{right:10},photoDots:{position:"absolute",top:10,left:0,right:0,flexDirection:"row",justifyContent:"center",gap:4},photoDot:{width:18,height:3,borderRadius:2,backgroundColor:"#FFFFFF80"},photoDotActive:{backgroundColor:colors.white},interestRow:{flexDirection:'row',flexWrap:'wrap',gap:7},moreHint:{fontSize:10,color:colors.muted,alignSelf:'center',marginTop:8},premiumLink:{fontSize:10,fontWeight:'800',color:colors.violet},premiumCard:{flexDirection:'row',alignItems:'center',gap:12,marginBottom:25},premiumStar:{width:42,height:42,borderRadius:14,backgroundColor:colors.violet,alignItems:'center',justifyContent:'center'},premiumTitle:{fontSize:12,color:colors.ink,fontWeight:'800'},premiumText:{fontSize:10,color:colors.muted,marginTop:4},loadingCard:{height:130,alignItems:'center',justifyContent:'center',gap:12},loadingCopy:{fontSize:12,color:colors.muted},errorHeading:{fontWeight:'800',fontSize:16,color:colors.ink},errorCopy:{fontSize:12,color:colors.muted,marginTop:7,lineHeight:18}});
 
-
+const styles = StyleSheet.create({
+  screen: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 40 },
+  topHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  eyebrow: {
+    fontSize: 10,
+    letterSpacing: 1.5,
+    fontWeight: '900',
+    color: colors.violet,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: -0.8,
+    color: colors.ink,
+    marginTop: 2,
+  },
+  topHeaderActions: { flexDirection: 'row', gap: 10 },
+  iconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchRow: { flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 12 },
+  searchInputWrap: {
+    flex: 1,
+    height: 48,
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.line,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.ink,
+    paddingHorizontal: 10,
+  },
+  filterBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterBtnPremium: {
+    backgroundColor: colors.violet,
+    borderColor: colors.violet,
+  },
+  cityChipsRow: { gap: 8, paddingBottom: 10 },
+  cityChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  cityChipSelected: {
+    backgroundColor: colors.violet,
+    borderColor: colors.violet,
+  },
+  cityChipText: { fontSize: 12, fontWeight: '700', color: colors.muted },
+  cityChipTextSelected: { color: colors.white },
+  feedCountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  feedSectionLabel: { fontSize: 16, fontWeight: '900', color: colors.ink },
+  feedCountText: { fontSize: 12, fontWeight: '700', color: colors.muted },
+  profilesFeed: { gap: 12 },
+  profileRowCard: {
+    padding: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.white,
+  },
+  cardContentRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  avatarContainer: { position: 'relative', marginRight: 14 },
+  flamingStoryRing: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    padding: 2.8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#FF4500',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  flamingInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flameBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#FF4500',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.white,
+  },
+  normalAvatarRing: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    borderWidth: 1.5,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onlineDot: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    width: 13,
+    height: 13,
+    borderRadius: 6.5,
+    backgroundColor: '#10B981',
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  cardBodyRight: { flex: 1 },
+  topInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 },
+  nameText: { fontSize: 16, fontWeight: '900', color: colors.ink },
+  ageCityBadge: {
+    backgroundColor: colors.paleViolet,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  ageCityText: { fontSize: 11, fontWeight: '800', color: colors.violet },
+  nicknameText: { fontSize: 12, fontWeight: '600', color: colors.muted, marginTop: 2 },
+  activeChatBadge: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  activeChatText: { fontSize: 10, fontWeight: '900', color: '#2E7D32' },
+  statusQuote: {
+    fontSize: 13,
+    color: colors.ink,
+    lineHeight: 18,
+    marginTop: 6,
+  },
+  tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  tagPill: {
+    backgroundColor: colors.canvas,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  tagPillText: { fontSize: 10, fontWeight: '700', color: colors.muted },
+  chatActionHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 10,
+    alignSelf: 'flex-start',
+  },
+  chatActionHintText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: colors.violet,
+  },
+  loadingCard: { padding: 32, alignItems: 'center', gap: 12, borderRadius: 20 },
+  loadingText: { fontSize: 13, color: colors.muted, fontWeight: '700' },
+  emptyWrap: { padding: 24, borderRadius: 20 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  chatModalContent: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    padding: 20,
+    paddingBottom: 36,
+  },
+  chatModalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  chatModalTitle: { fontSize: 17, fontWeight: '900', color: colors.ink },
+  chatModalSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  chatModalInput: {
+    minHeight: 80,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.canvas,
+    padding: 12,
+    fontSize: 14,
+    color: colors.ink,
+    textAlignVertical: 'top',
+    marginBottom: 16,
+  },
+  chatModalButtons: { flexDirection: 'row', gap: 10 },
+  modalContent: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    padding: 20,
+    paddingBottom: 36,
+  },
+  modalGrabber: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#DDD',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalHeaderTitle: { fontSize: 18, fontWeight: '900', color: colors.ink },
+  modalSectionLabel: {
+    fontSize: 10,
+    letterSpacing: 1.2,
+    fontWeight: '900',
+    color: colors.muted,
+    marginBottom: 10,
+  },
+  premiumBox: {
+    borderWidth: 1,
+    borderColor: '#F3E5AB',
+    backgroundColor: '#FFFDF5',
+    borderRadius: 18,
+    padding: 16,
+    marginTop: 8,
+  },
+  premiumBoxHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  premiumBoxTitle: { fontSize: 14, fontWeight: '900', color: colors.ink },
+  premiumLockBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFF4D6',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  premiumLockText: { fontSize: 10, fontWeight: '900', color: '#B57C00' },
+  premiumLockNotice: { alignItems: 'center', paddingVertical: 8 },
+  premiumLockDesc: {
+    fontSize: 12,
+    color: colors.muted,
+    textAlign: 'center',
+    lineHeight: 17,
+  },
+  premiumActiveControls: { marginTop: 6 },
+  inputLabel: { fontSize: 12, fontWeight: '800', color: colors.ink, marginBottom: 4 },
+  numberInput: {
+    height: 40,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    fontSize: 14,
+    backgroundColor: colors.white,
+  },
+  genderRow: { flexDirection: 'row', gap: 8, marginTop: 6 },
+  genderChip: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 10,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  genderChipSelected: {
+    backgroundColor: colors.violet,
+    borderColor: colors.violet,
+  },
+  genderChipText: { fontSize: 12, fontWeight: '700', color: colors.muted },
+  genderChipTextSelected: { color: colors.white },
+});

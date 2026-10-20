@@ -6,7 +6,7 @@ namespace MindMatch.Application.Services;
 
 public sealed class MediaService : IMediaService
 {
-    private const int MaxImageBytes = 10 * 1024 * 1024;
+    private const int MaxImageBytes = 25 * 1024 * 1024;
     private const int MaxAudioBytes = 15 * 1024 * 1024;
     private const int MaxVideoBytes = 50 * 1024 * 1024;
     private readonly IMediaStorage _storage;
@@ -178,22 +178,35 @@ public sealed class MediaService : IMediaService
         ArgumentNullException.ThrowIfNull(bytes);
         if (category is MediaCategory.ProfilePhoto or MediaCategory.MessageImage or MediaCategory.StoryImage)
         {
-            if (TryGetPngDimensions(bytes, out var width, out var height))
+            // 1. JPEG: 0xFF, 0xD8
+            if (bytes.Length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8)
             {
-                if (width is < 1 or > 8192 || height is < 1 or > 8192 || (long)width * height > 40_000_000)
+                TryGetJpegDimensions(bytes, out var jpegWidth, out var jpegHeight);
+                if (jpegWidth > 8192 || jpegHeight > 8192 || (long)jpegWidth * jpegHeight > 40_000_000)
+                    throw new ArgumentException("JPEG görseli boyut sınırını aşıyor.");
+                return ("image/jpeg", "jpg", jpegWidth > 0 ? jpegWidth : null, jpegHeight > 0 ? jpegHeight : null);
+            }
+
+            // 2. PNG: 137, 80, 78, 71, 13, 10, 26, 10
+            ReadOnlySpan<byte> pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+            if (bytes.Length >= 8 && bytes.AsSpan(0, 8).SequenceEqual(pngSignature))
+            {
+                TryGetPngDimensions(bytes, out var width, out var height);
+                if (width > 8192 || height > 8192 || (long)width * height > 40_000_000)
                     throw new ArgumentException("Görsel çözünürlüğü izin verilen sınırların dışında.");
-                if (!IsContentType(suppliedContentType, "image/png"))
-                    throw new ArgumentException("Dosya geçerli PNG görseli değil.");
-                return ("image/png", "png", width, height);
+                return ("image/png", "png", width > 0 ? width : null, height > 0 ? height : null);
             }
-            if (TryGetJpegDimensions(bytes, out var jpegWidth, out var jpegHeight))
+
+            // 3. WebP: RIFF .... WEBP
+            if (bytes.Length >= 12 && bytes.AsSpan(0, 4).SequenceEqual("RIFF"u8) && bytes.AsSpan(8, 4).SequenceEqual("WEBP"u8))
             {
-                if (jpegWidth > 8192 || jpegHeight > 8192 || (long)jpegWidth * jpegHeight > 40_000_000 ||
-                    !IsContentType(suppliedContentType, "image/jpeg"))
-                    throw new ArgumentException("JPEG görseli boyut sınırını aşıyor veya içerik türü hatalı.");
-                return ("image/jpeg", "jpg", jpegWidth, jpegHeight);
+                TryGetWebpDimensions(bytes, out var webpWidth, out var webpHeight);
+                if (webpWidth > 8192 || webpHeight > 8192 || (long)webpWidth * webpHeight > 40_000_000)
+                    throw new ArgumentException("WebP görseli boyut sınırını aşıyor.");
+                return ("image/webp", "webp", webpWidth > 0 ? webpWidth : null, webpHeight > 0 ? webpHeight : null);
             }
-            throw new ArgumentException("Yalnızca doğrulanabilir PNG ve JPEG görselleri destekleniyor.");
+
+            throw new ArgumentException("Yalnızca doğrulanabilir JPEG, PNG ve WebP görselleri destekleniyor.");
         }
 
         if (category == MediaCategory.MessageVoice)
@@ -220,71 +233,75 @@ public sealed class MediaService : IMediaService
     private static bool StartsWith(ReadOnlySpan<byte> bytes, ReadOnlySpan<byte> prefix) => bytes.StartsWith(prefix);
     private static bool IsContentType(string supplied, string expected) => string.Equals(supplied?.Split(';')[0].Trim(), expected, StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsAcceptableImageContentType(string supplied, string expected)
+    {
+        if (string.IsNullOrWhiteSpace(supplied)) return true;
+        var clean = supplied.Split(';')[0].Trim();
+        if (string.Equals(clean, expected, StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(clean, "application/octet-stream", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(clean, "multipart/form-data", StringComparison.OrdinalIgnoreCase)) return true;
+        if (expected == "image/jpeg" && (
+            string.Equals(clean, "image/jpg", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(clean, "image/pjpeg", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (expected == "image/png" && (
+            string.Equals(clean, "image/x-png", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return clean.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool TryGetPngDimensions(byte[] bytes, out int width, out int height)
     {
         width = height = 0;
         ReadOnlySpan<byte> signature = [137, 80, 78, 71, 13, 10, 26, 10];
-        if (bytes.Length < 57 || !bytes.AsSpan(0, 8).SequenceEqual(signature)) return false;
-        var position = 8;
-        var hasHeader = false;
-        var hasImageData = false;
-        while (position <= bytes.Length - 12)
+        if (bytes.Length < 33 || !bytes.AsSpan(0, 8).SequenceEqual(signature)) return false;
+
+        var chunkLengthRaw = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(8, 4));
+        if (chunkLengthRaw != 13 || !bytes.AsSpan(12, 4).SequenceEqual("IHDR"u8)) return false;
+
+        width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(16, 4));
+        height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(20, 4));
+
+        return width > 0 && height > 0;
+    }
+
+    private static bool TryGetWebpDimensions(byte[] bytes, out int width, out int height)
+    {
+        width = height = 0;
+        if (bytes.Length < 30) return false;
+        if (!bytes.AsSpan(0, 4).SequenceEqual("RIFF"u8) || !bytes.AsSpan(8, 4).SequenceEqual("WEBP"u8)) return false;
+
+        var format = bytes.AsSpan(12, 4);
+        if (format.SequenceEqual("VP8 "u8) && bytes.Length >= 30)
         {
-            var chunkLengthRaw = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(position, 4));
-            if (chunkLengthRaw > int.MaxValue) return false;
-            var chunkLength = (int)chunkLengthRaw;
-            var chunkEndLong = (long)position + chunkLength + 12;
-            if (chunkEndLong > bytes.Length) return false;
-            var type = bytes.AsSpan(position + 4, 4);
-            var data = bytes.AsSpan(position + 8, chunkLength);
-            var storedCrc = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(position + 8 + chunkLength, 4));
-            if (CalculatePngCrc(type, data) != storedCrc) return false;
-
-            if (!hasHeader)
+            if (bytes[23] == 0x9D && bytes[24] == 0x01 && bytes[25] == 0x2A)
             {
-                if (!type.SequenceEqual("IHDR"u8) || chunkLength != 13) return false;
-                width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(data[..4]);
-                height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(data.Slice(4, 4));
-                if (data[10] != 0 || data[11] != 0 || data[12] != 0) return false;
-                hasHeader = true;
+                width = (bytes[26] | (bytes[27] << 8)) & 0x3FFF;
+                height = (bytes[28] | (bytes[29] << 8)) & 0x3FFF;
+                return width > 0 && height > 0;
             }
-            else if (type.SequenceEqual("IHDR"u8)) return false;
-
-            if (type.SequenceEqual("IDAT"u8))
-            {
-                if (chunkLength == 0) return false;
-                hasImageData = true;
-            }
-            if (type.SequenceEqual("IEND"u8))
-                return chunkLength == 0 && hasImageData && chunkEndLong == bytes.Length;
-            position = (int)chunkEndLong;
         }
+        else if (format.SequenceEqual("VP8L"u8) && bytes.Length >= 25)
+        {
+            if (bytes[20] == 0x2F)
+            {
+                var b1 = bytes[21];
+                var b2 = bytes[22];
+                var b3 = bytes[23];
+                var b4 = bytes[24];
+                width = 1 + (((b2 & 0x3F) << 8) | b1);
+                height = 1 + ((((b4 & 0xF) << 10) | (b3 << 2) | ((b2 & 0xC0) >> 6)) & 0x3FFF);
+                return width > 0 && height > 0;
+            }
+        }
+        else if (format.SequenceEqual("VP8X"u8) && bytes.Length >= 30)
+        {
+            width = 1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16));
+            height = 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16));
+            return width > 0 && height > 0;
+        }
+
         return false;
-    }
-
-    private static uint CalculatePngCrc(ReadOnlySpan<byte> type, ReadOnlySpan<byte> data)
-    {
-        uint crc = 0xFFFFFFFF;
-        foreach (var value in type)
-            crc = (crc >> 8) ^ PngCrcTable[(crc ^ value) & 0xFF];
-        foreach (var value in data)
-            crc = (crc >> 8) ^ PngCrcTable[(crc ^ value) & 0xFF];
-        return ~crc;
-    }
-
-    private static readonly uint[] PngCrcTable = CreatePngCrcTable();
-
-    private static uint[] CreatePngCrcTable()
-    {
-        var table = new uint[256];
-        for (uint index = 0; index < table.Length; index++)
-        {
-            var value = index;
-            for (var bit = 0; bit < 8; bit++)
-                value = (value & 1) == 1 ? 0xEDB88320u ^ (value >> 1) : value >> 1;
-            table[index] = value;
-        }
-        return table;
     }
 
     private static bool IsValidWav(byte[] bytes)
@@ -457,51 +474,57 @@ public sealed class MediaService : IMediaService
     private static bool TryGetJpegDimensions(byte[] bytes, out int width, out int height)
     {
         width = height = 0;
-        if (bytes.Length < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 || bytes[^2] != 0xFF || bytes[^1] != 0xD9) return false;
+        if (bytes.Length < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8) return false;
+
         var position = 2;
         var hasFrame = false;
-        var hasScan = false;
-        while (position + 4 <= bytes.Length - 2)
+
+        while (position < bytes.Length - 1)
         {
-            if (bytes[position++] != 0xFF) return false;
-            while (position < bytes.Length && bytes[position] == 0xFF) position++;
-            if (position >= bytes.Length) return false;
+            if (bytes[position++] != 0xFF) continue;
+
+            while (position < bytes.Length && bytes[position] == 0xFF)
+                position++;
+
+            if (position >= bytes.Length) break;
+
             var marker = bytes[position++];
-            if (marker == 0xD9) return hasFrame && hasScan && position == bytes.Length - 1;
-            if (marker == 0x00 || marker is 0xD8 or 0x01 || marker is >= 0xD0 and <= 0xD7) return false;
-            if (position + 2 > bytes.Length) return false;
+
+            if (marker == 0x00) continue;
+
+            if (marker is 0xD8 or 0x01 || (marker >= 0xD0 && marker <= 0xD7))
+                continue;
+
+            if (marker == 0xD9)
+            {
+                if (hasFrame) return true;
+                break;
+            }
+
+            if (position + 2 > bytes.Length) break;
             var segmentLength = (bytes[position] << 8) | bytes[position + 1];
-            if (segmentLength < 2 || position + segmentLength > bytes.Length) return false;
+            if (segmentLength < 2 || position + segmentLength > bytes.Length) break;
+
             if (marker is 0xC0 or 0xC1 or 0xC2 or 0xC3 or 0xC5 or 0xC6 or 0xC7 or 0xC9 or 0xCA or 0xCB or 0xCD or 0xCE or 0xCF)
             {
-                if (segmentLength < 8 || hasFrame) return false;
-                height = (bytes[position + 3] << 8) | bytes[position + 4];
-                width = (bytes[position + 5] << 8) | bytes[position + 6];
-                if (width <= 0 || height <= 0) return false;
-                var components = bytes[position + 7];
-                if (components == 0 || segmentLength != 8 + 3 * components) return false;
-                hasFrame = true;
-            }
-            if (marker == 0xDA)
-            {
-                if (!hasFrame || segmentLength < 6) return false;
-                var components = bytes[position + 2];
-                if (components == 0 || segmentLength != 6 + 2 * components) return false;
-                hasScan = true;
-                position += segmentLength;
-                while (position < bytes.Length - 1)
+                if (segmentLength >= 8)
                 {
-                    if (bytes[position++] != 0xFF) continue;
-                    if (position >= bytes.Length) return false;
-                    var scanMarker = bytes[position++];
-                    if (scanMarker == 0x00 || scanMarker is >= 0xD0 and <= 0xD7) continue;
-                    position -= 2;
-                    break;
+                    height = (bytes[position + 3] << 8) | bytes[position + 4];
+                    width = (bytes[position + 5] << 8) | bytes[position + 6];
+                    if (width > 0 && height > 0)
+                    {
+                        hasFrame = true;
+                    }
                 }
-                continue;
             }
+            else if (marker == 0xDA && hasFrame)
+            {
+                return true;
+            }
+
             position += segmentLength;
         }
-        return false;
+
+        return hasFrame && width > 0 && height > 0;
     }
 }

@@ -1,103 +1,796 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Animated,
+  Dimensions,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Camera, Check, ChevronRight, Crown, LogOut, MapPin, Pencil, Settings, Shield, Sparkles, Star } from 'lucide-react-native';
-import { interestApi, mediaApi, profileApi, premiumApi, storyApi } from '../../api/mindmatch';
-import { Avatar, Button, Card, Loading, ProtectedImage, Screen, SectionLabel } from '../../components/ui';
+import * as Haptics from 'expo-haptics';
+import {
+  Bell,
+  Camera,
+  Check,
+  ChevronRight,
+  CirclePlus,
+  Crown,
+  Eye,
+  Flame,
+  Globe,
+  ImagePlus,
+  LogOut,
+  MapPin,
+  Pencil,
+  Plus,
+  Settings,
+  Shield,
+  Sparkles,
+  Star,
+  Trash2,
+  User,
+} from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { interestApi, mediaApi, profileApi, premiumApi, storyApi, notificationApi } from '../../api/mindmatch';
+import { Avatar, Button, Card, Loading, ProtectedImage, Screen } from '../../components/ui';
 import { useSession } from '../../state/session';
 import { colors } from '../../theme/tokens';
 import { normalizeImageForUpload, uploadFailureMessage } from '../../utils/media';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function ProfileScreen() {
   const qc = useQueryClient();
   const user = useSession(x => x.user);
   const signOut = useSession(x => x.signOut);
+
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [photoUploadStage, setPhotoUploadStage] = useState('');
   const [photoUploadError, setPhotoUploadError] = useState('');
+
   const profile = useQuery({ queryKey: ['my-profile'], queryFn: profileApi.mine });
   const photos = useQuery({ queryKey: ['my-photos'], queryFn: () => profileApi.photos() });
   const interests = useQuery({ queryKey: ['interests'], queryFn: interestApi.list });
   const premium = useQuery({ queryKey: ['premium'], queryFn: premiumApi.mine });
   const ownStories = useQuery({ queryKey: ['my-stories'], queryFn: storyApi.mine });
-  const visible = useMutation({ mutationFn: profileApi.setVisibility, onSuccess: () => qc.invalidateQueries({ queryKey: ['my-profile'] }), onError: error => Alert.alert('Görünürlük değiştirilemedi', error.message) });
-  const setPrimary = useMutation({ mutationFn: profileApi.setPrimaryPhoto, onSuccess: () => qc.invalidateQueries({ queryKey: ['my-photos'] }), onError: error => Alert.alert('Fotoğraf güncellenemedi', error.message) });
-  const deletePhoto = useMutation({ mutationFn: profileApi.deletePhoto, onSuccess: () => qc.invalidateQueries({ queryKey: ['my-photos'] }), onError: error => Alert.alert('Fotoğraf silinemedi', error.message) });
+  const notifications = useQuery({ queryKey: ['notifications'], queryFn: notificationApi.list, refetchInterval: 15_000 });
 
-  async function addPhoto() {
+  // Pulsing animation for story ring / VIP aura
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.05, duration: 1500, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 1500, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulseAnim]);
+
+  const visible = useMutation({
+    mutationFn: profileApi.setVisibility,
+    onSuccess: () => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      qc.invalidateQueries({ queryKey: ['my-profile'] });
+    },
+    onError: error => Alert.alert('Görünürlük değiştirilemedi', error.message),
+  });
+
+  const setPrimary = useMutation({
+    mutationFn: profileApi.setPrimaryPhoto,
+    onSuccess: () => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      qc.invalidateQueries({ queryKey: ['my-photos'] });
+    },
+    onError: error => Alert.alert('Fotoğraf güncellenemedi', error.message),
+  });
+
+  const deletePhoto = useMutation({
+    mutationFn: profileApi.deletePhoto,
+    onSuccess: () => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      qc.invalidateQueries({ queryKey: ['my-photos'] });
+    },
+    onError: error => Alert.alert('Fotoğraf silinemedi', error.message),
+  });
+
+  async function addPhoto(source: 'camera' | 'library' = 'library') {
     if (uploadingPhoto) return;
     setUploadingPhoto(true);
     setPhotoUploadStage('Fotoğraf seçiliyor…');
     setPhotoUploadError('');
     try {
-      const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: .9, preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible });
+      const permission =
+        source === 'camera'
+          ? await ImagePicker.requestCameraPermissionsAsync()
+          : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        throw new Error(source === 'camera' ? 'Kamera izni gerekli.' : 'Galeri izni gerekli.');
+      }
+      const options = {
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [4, 5] as [number, number],
+        quality: 0.9,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+      };
+      const pick =
+        source === 'camera'
+          ? await ImagePicker.launchCameraAsync(options)
+          : await ImagePicker.launchImageLibraryAsync(options);
       if (pick.canceled) return;
+
       setPhotoUploadStage('Fotoğraf hazırlanıyor…');
       const image = await normalizeImageForUpload(pick.assets[0].uri);
+
       setPhotoUploadStage('Sunucuya yükleniyor…');
       const media = await mediaApi.upload(image.uri, image.fileName, image.mimeType, 1);
-      setPhotoUploadStage('Profil fotoğrafı kaydediliyor…');
-      try { await mediaApi.photo(media.id); }
-      catch (error) { await mediaApi.delete(media.id).catch(() => {}); throw error; }
-      await Promise.all([qc.invalidateQueries({ queryKey: ['my-photos'] }), qc.invalidateQueries({ queryKey: ['my-profile'] })]);
-      Alert.alert('Fotoğraf eklendi', 'Yeni fotoğrafın profiline eklendi.');
-    } catch (error) { const message = uploadFailureMessage(error); setPhotoUploadError(message); if (Platform.OS !== 'web') Alert.alert('Fotoğraf yüklenemedi', message); }
-    finally { setUploadingPhoto(false); setPhotoUploadStage(''); }
+
+      setPhotoUploadStage('Kaydediliyor…');
+      try {
+        await mediaApi.photo(media.id);
+      } catch (error) {
+        await mediaApi.delete(media.id).catch(() => {});
+        throw error;
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['my-photos'] }),
+        qc.invalidateQueries({ queryKey: ['my-profile'] }),
+      ]);
+      Alert.alert('Fotoğraf Eklendi', 'Yeni fotoğrafın vitrine başarıyla eklendi.');
+    } catch (error) {
+      const message = uploadFailureMessage(error);
+      setPhotoUploadError(message);
+      if (Platform.OS !== 'web') Alert.alert('Fotoğraf yüklenemedi', message);
+    } finally {
+      setUploadingPhoto(false);
+      setPhotoUploadStage('');
+    }
   }
 
-  function photoActions(photo: { id: string; isPrimary: boolean }) {
-    Alert.alert('Fotoğraf seçenekleri', photo.isPrimary ? 'Ana profil fotoğrafın.' : 'Bu fotoğrafla ne yapmak istersin?', [
+  function choosePhoto() {
+    if (Platform.OS === 'web') {
+      addPhoto();
+      return;
+    }
+    Alert.alert('Profil Vitrini', 'Yeni bir fotoğraf ekle:', [
+      { text: '📷 Kamera ile Çek', onPress: () => addPhoto('camera') },
+      { text: '🖼️ Galeriden Seç', onPress: () => addPhoto('library') },
       { text: 'Vazgeç', style: 'cancel' },
-      ...(!photo.isPrimary ? [{ text: 'Ana fotoğraf yap', onPress: () => setPrimary.mutate(photo.id) }] : []),
-      { text: 'Sil', style: 'destructive', onPress: () => Alert.alert('Fotoğraf silinsin mi?', 'Bu fotoğraf profilinden kaldırılacak.', [{ text: 'Vazgeç', style: 'cancel' }, { text: 'Sil', style: 'destructive', onPress: () => deletePhoto.mutate(photo.id) }]) },
     ]);
   }
 
-  if (profile.isLoading) return <Screen><Loading label="Profilin yükleniyor" /></Screen>;
-  if (profile.error || !profile.data) return <Screen scroll><Card><Text style={s.heading}>Profil açılamadı</Text><Text style={s.muted}>{profile.error instanceof Error ? profile.error.message : 'Profil bilgilerine ulaşılamadı.'}</Text><Button title="Yeniden dene" onPress={() => profile.refetch()} style={s.gap} /></Card></Screen>;
+  function photoActions(photo: { id: string; isPrimary: boolean }) {
+    Alert.alert(
+      'Fotoğraf Seçenekleri',
+      photo.isPrimary ? 'Bu senin ana profil fotoğrafın.' : 'Bu fotoğraf için ne yapmak istersin?',
+      [
+        ...(!photo.isPrimary ? [{ text: '★ Ana Fotoğraf Yap', onPress: () => setPrimary.mutate(photo.id) }] : []),
+        {
+          text: 'Fotoğrafı Sil',
+          style: 'destructive',
+          onPress: () =>
+            Alert.alert('Silinsin mi?', 'Bu fotoğraf kalıcı olarak kaldırılacak.', [
+              { text: 'Vazgeç', style: 'cancel' },
+              { text: 'Sil', style: 'destructive', onPress: () => deletePhoto.mutate(photo.id) },
+            ]),
+        },
+        { text: 'Vazgeç', style: 'cancel' },
+      ]
+    );
+  }
+
+  if (profile.isLoading) {
+    return (
+      <Screen>
+        <Loading label="Profil yükleniyor…" />
+      </Screen>
+    );
+  }
 
   const p = profile.data;
   const photoList = photos.data ?? [];
   const primaryPhoto = photoList.find(photo => photo.isPrimary) ?? photoList[0];
   const activeStories = ownStories.data ?? [];
-  const selectedInterestNames = (p.interestIds ?? []).map(id => interests.data?.find(item => item.id === id)?.name).filter((name): name is string => Boolean(name));
-  const completion = [Boolean(p.displayName), Boolean(p.bio?.trim()), Boolean(p.city?.trim()), photoList.length > 0, (p.interestIds?.length ?? 0) > 0].filter(Boolean).length;
-  const admin = ['Admin', 'Moderator'].includes(user?.role || '');
+  const hasActiveStories = activeStories.length > 0;
+  const isVip = Boolean(premium.data?.isPremium);
+  const unreadCount = notifications.data?.items?.filter(x => !x.readAtUtc).length ?? 0;
 
-  return <Screen scroll style={s.screen}>
-    <View style={s.topLine}><View><Text style={s.eyebrow}>MINDMATCH · SENİN ALANIN</Text><Text style={s.pageTitle}>Profilim</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Ayarları aç" onPress={() => router.push('/settings')} style={s.settingsButton}><Settings size={19} color={colors.violet} /></Pressable></View>
+  const selectedInterestNames = (p?.interestIds ?? [])
+    .map(id => interests.data?.find(item => item.id === id)?.name)
+    .filter((name): name is string => Boolean(name));
 
-    <Card style={s.hero}>
-      <View style={s.heroTop}><Pressable accessibilityRole="button" accessibilityLabel={activeStories.length ? 'Hikâyeni görüntüle' : 'Hikâye paylaş'} onPress={() => activeStories.length ? router.push({ pathname: '/story/[id]', params: { id: activeStories[0].id, userId: p.userId } }) : router.push('/(tabs)/stories')} style={[s.avatarRing, activeStories.length > 0 && s.avatarRingActive]}><Avatar name={p.displayName || 'MindMatch'} size={70} mediaAssetId={primaryPhoto?.mediaAssetId} />{activeStories.length > 0 ? <View style={s.storyDot}><Text style={s.storyDotText}>{activeStories.length}</Text></View> : null}</Pressable><View style={s.identity}><Text style={s.name}>{p.displayName || 'MindMatch üyesi'}</Text><Text style={s.handle}>{p.nickname ? `@${p.nickname}` : user?.email}</Text><View style={s.location}><MapPin size={13} color={colors.violet} /><Text style={s.locationText}>{p.city || 'Şehir ekle'}</Text></View></View><Pressable accessibilityRole="button" accessibilityLabel="Profili düzenle" onPress={() => router.push('/settings')} style={s.editButton}><Pencil size={16} color={colors.violet} /></Pressable></View>
-      <Text style={s.bio}>{p.bio?.trim() || 'Kendinden bahset. Sana benzeyen insanlarla tanışmanın en güzel yolu bu.'}</Text>
-      <View style={s.progressHead}><Text style={s.progressTitle}>Profil tamamlanma</Text><Text style={s.progressValue}>{completion}/5</Text></View><View style={s.progressTrack}><View style={[s.progressFill, { width: `${completion * 20}%` }]} /></View>
-      <View style={s.photoSection}><SectionLabel>Fotoğrafların <Text style={s.photoCount}>{photoList.length}/6</Text></SectionLabel><View style={s.photoGrid}>{photoList.map(photo => <Pressable key={photo.id} onPress={() => photoActions(photo)} style={s.photoTile}>{photo.mediaAssetId ? <ProtectedImage mediaAssetId={photo.mediaAssetId} style={StyleSheet.absoluteFill} /> : null}{photo.isPrimary ? <View style={s.primaryBadge}><Star size={10} color={colors.white} fill={colors.white} /><Text style={s.badgeText}>ANA</Text></View> : <View style={s.photoMenu}><Text style={s.photoMenuText}>•••</Text></View>}</Pressable>)}{photoList.length < 6 ? <Pressable accessibilityRole="button" accessibilityLabel={uploadingPhoto ? photoUploadStage : 'Fotoğraf ekle'} disabled={uploadingPhoto} style={[s.addTile, uploadingPhoto && s.disabled]} onPress={addPhoto}>{uploadingPhoto ? <ActivityIndicator size="small" color={colors.violet} /> : <Camera size={19} color={colors.violet} />}<Text style={s.addText}>{uploadingPhoto ? 'Ekleniyor…' : 'Fotoğraf ekle'}</Text></Pressable> : null}</View>{uploadingPhoto?<Text accessibilityLiveRegion="polite" style={s.photoUploadStatus}>{photoUploadStage}</Text>:null}{photoUploadError?<Text accessibilityLiveRegion="assertive" style={s.photoUploadError}>{photoUploadError}</Text>:null}</View>
-      <Button title={visible.isPending ? 'Güncelleniyor…' : p.isProfileVisible ? 'Keşifte görünüyorsun' : 'Profilin gizli'} variant={p.isProfileVisible ? 'soft' : 'outline'} onPress={() => visible.mutate(!p.isProfileVisible)} style={s.visibility} icon={<Check size={16} color={colors.violet} />} />
-    </Card>
+  return (
+    <Screen scroll style={styles.screen}>
+      {/* Snapchat-Style Top Bar (No clunky card, floating clean header) */}
+      <View style={styles.snapTopBar}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push('/notifications')}
+          style={styles.headerIconButton}
+        >
+          <Bell size={20} color={colors.ink} />
+          {unreadCount > 0 && <View style={styles.bellBadge} />}
+        </Pressable>
 
-    <SectionLabel>Benim dünyam</SectionLabel>
-    <Card style={s.interestCard}><View style={s.sectionTitleRow}><Sparkles size={17} color={colors.violet} /><Text style={s.cardHeading}>İlgi alanları</Text><Pressable onPress={() => router.push('/settings')}><Text style={s.editLink}>Düzenle</Text></Pressable></View>{selectedInterestNames.length ? <View style={s.chips}>{selectedInterestNames.slice(0, 8).map(name => <View key={name} style={s.chip}><Text style={s.chipText}>{name}</Text></View>)}</View> : <Text style={s.muted}>İlgi alanlarını seç, ortak noktalarını keşfet.</Text>}</Card>
+        <Text style={styles.topBarTitle}>Profil</Text>
 
-    <SectionLabel>Hesap</SectionLabel>
-    <View style={s.rows}>
-      <Row icon={<Crown color="#C58B26" size={19} />} title="Premium" detail={premium.data?.isPremium ? 'Premium üyeliğin aktif' : 'Üyelik avantajlarını keşfet'} onPress={() => router.push('/premium')} />
-      <Row icon={<Sparkles color={colors.violet} size={19} />} title="Bağlantı istekleri" detail="Eşleşme ve mesaj isteklerini yönet" onPress={() => router.push('/requests')} />
-      <Row icon={<Shield color={colors.violet} size={19} />} title="Ayarlar ve gizlilik" detail="Profilini ve tercihlerini düzenle" onPress={() => router.push('/settings')} />
-      {admin ? <Row icon={<Shield color={colors.coral} size={19} />} title="Moderasyon paneli" detail="Rapor kuyruğunu incele" onPress={() => router.push('/admin')} /> : null}
-      <Row icon={<LogOut color={colors.red} size={19} />} title="Oturumu kapat" detail="Bu cihazdan güvenli çıkış" onPress={() => Alert.alert('Çıkış yapılsın mı?', 'Oturumun bu cihazdan kapatılacak.', [{ text: 'Vazgeç', style: 'cancel' }, { text: 'Çıkış yap', style: 'destructive', onPress: () => signOut() }])} />
-    </View>
-  </Screen>;
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.push('/settings')}
+          style={styles.headerIconButton}
+        >
+          <Settings size={20} color={colors.ink} />
+        </Pressable>
+      </View>
+
+      {/* Snapchat Hero Section: Centered, Fluid, Bitmoji / Snapcode style */}
+      <View style={styles.snapHero}>
+        {/* Glowing / Burning Avatar Container */}
+        <Animated.View style={{ transform: [{ scale: hasActiveStories ? pulseAnim : 1 }] }}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              if (hasActiveStories) {
+                router.push({ pathname: '/story/[id]', params: { id: activeStories[0].id, userId: p?.userId } });
+              } else {
+                choosePhoto();
+              }
+            }}
+            style={styles.avatarTouchTarget}
+          >
+            {hasActiveStories ? (
+              <LinearGradient
+                colors={['#FF007A', '#FF4500', '#FFD600', '#FF0055']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.snapHeroRing}
+              >
+                <View style={styles.snapHeroInner}>
+                  <Avatar name={p?.displayName || 'Sen'} size={92} mediaAssetId={primaryPhoto?.mediaAssetId} />
+                </View>
+                <View style={styles.snapStoryCountBadge}>
+                  <Text style={styles.snapStoryCountText}>{activeStories.length}</Text>
+                </View>
+              </LinearGradient>
+            ) : (
+              <View style={[styles.snapNormalRing, isVip && styles.snapVipRing]}>
+                <Avatar name={p?.displayName || 'Sen'} size={92} mediaAssetId={primaryPhoto?.mediaAssetId} />
+                <Pressable onPress={choosePhoto} style={styles.snapAddBadge}>
+                  <Plus size={16} color="#FFF" strokeWidth={3} />
+                </Pressable>
+              </View>
+            )}
+          </Pressable>
+        </Animated.View>
+
+        {/* Display Name + Badges */}
+        <View style={styles.snapNameRow}>
+          <Text style={styles.snapDisplayName}>{p?.displayName || 'MindMatch Üyesi'}</Text>
+          {isVip && (
+            <LinearGradient
+              colors={['#FFDF00', '#F59E0B']}
+              style={styles.snapVipBadge}
+            >
+              <Crown size={12} color="#FFF" fill="#FFF" />
+              <Text style={styles.snapVipBadgeText}>VIP</Text>
+            </LinearGradient>
+          )}
+        </View>
+
+        {/* Username & City Details */}
+        <Text style={styles.snapHandleText}>
+          @{p?.nickname || 'mindmatch'}
+          {p?.age ? ` · ${p.age} yaş` : ''}
+          {p?.city ? ` · ${p.city}` : ''}
+        </Text>
+
+        {/* Bio Status Quote */}
+        {p?.bio?.trim() ? (
+          <Text style={styles.snapBioText}>"{p.bio.trim()}"</Text>
+        ) : (
+          <Pressable onPress={() => router.push('/settings')}>
+            <Text style={styles.snapBioPlaceholder}>+ Biyografi ve durumunu ekle</Text>
+          </Pressable>
+        )}
+
+        {/* Snapchat Action Pills (Horizontal Row) */}
+        <View style={styles.snapActionPillsRow}>
+          <Pressable
+            onPress={() => router.push('/(tabs)/stories')}
+            style={styles.snapPillPrimary}
+          >
+            <Camera size={16} color="#FFF" />
+            <Text style={styles.snapPillPrimaryText}>Hikâye Paylaş</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.push('/settings')}
+            style={styles.snapPillSecondary}
+          >
+            <Pencil size={15} color={colors.ink} />
+            <Text style={styles.snapPillSecondaryText}>Profili Düzenle</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.push('/(tabs)/notifications')}
+            style={[styles.snapPillSecondary, isVip && styles.snapPillVip]}
+          >
+            <Crown size={15} color={isVip ? '#B45309' : colors.violet} />
+            <Text style={[styles.snapPillSecondaryText, isVip && { color: '#B45309' }]}>
+              {isVip ? 'VIP Üye' : 'VIP Ol'}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {/* Snapchat Section 1: My Stories Card */}
+      <View style={styles.sectionCard}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Hikâyelerim</Text>
+          <Pressable onPress={() => router.push('/(tabs)/stories')}>
+            <Text style={styles.sectionActionText}>Tümünü Gör →</Text>
+          </Pressable>
+        </View>
+
+        {hasActiveStories ? (
+          <Pressable
+            onPress={() =>
+              router.push({ pathname: '/story/[id]', params: { id: activeStories[0].id, userId: p?.userId } })
+            }
+            style={styles.activeStoryRow}
+          >
+            <View style={styles.storyThumbWrapper}>
+              {activeStories[0].mediaAssetId ? (
+                <ProtectedImage mediaAssetId={activeStories[0].mediaAssetId} style={StyleSheet.absoluteFill} />
+              ) : (
+                <View style={styles.storyThumbFallback}><Text style={{ color: '#FFF' }}>✦</Text></View>
+              )}
+            </View>
+
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.activeStoryTitle}>Aktif Hikâyen Yayında</Text>
+              <Text style={styles.activeStorySubtitle}>
+                {activeStories.length} an paylaşıldı · 24 saat içinde sonlanır
+              </Text>
+            </View>
+
+            <View style={styles.storyWatchBtn}>
+              <Eye size={14} color={colors.violet} />
+              <Text style={styles.storyWatchBtnText}>İzle</Text>
+            </View>
+          </Pressable>
+        ) : (
+          <Pressable onPress={() => router.push('/(tabs)/stories')} style={styles.noStoryBox}>
+            <View style={styles.noStoryPlus}>
+              <CirclePlus size={20} color={colors.violet} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.noStoryTitle}>Henüz hikâye paylaşmadın</Text>
+              <Text style={styles.noStorySub}>Günün bir anını arkadaşlarınla paylaş.</Text>
+            </View>
+          </Pressable>
+        )}
+      </View>
+
+      {/* Snapchat Section 2: Photo Showcase (Vitrin) */}
+      <View style={styles.sectionCard}>
+        <View style={styles.sectionHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.sectionTitle}>Fotoğraf Vitrini</Text>
+            <Text style={styles.photoCountText}>{photoList.length}/6</Text>
+          </View>
+          {uploadingPhoto ? (
+            <ActivityIndicator size="small" color={colors.violet} />
+          ) : (
+            <Pressable onPress={choosePhoto}>
+              <Text style={styles.sectionActionText}>+ Fotoğraf Ekle</Text>
+            </Pressable>
+          )}
+        </View>
+
+        {uploadingPhoto && <Text style={styles.uploadingNotice}>{photoUploadStage}</Text>}
+        {photoUploadError ? <Text style={styles.uploadErrorNotice}>{photoUploadError}</Text> : null}
+
+        <View style={styles.photoGrid}>
+          {photoList.map(photo => (
+            <Pressable
+              key={photo.id}
+              onPress={() => photoActions(photo)}
+              style={styles.photoGridSlot}
+            >
+              {photo.mediaAssetId ? (
+                <ProtectedImage mediaAssetId={photo.mediaAssetId} style={StyleSheet.absoluteFill} />
+              ) : null}
+
+              {photo.isPrimary ? (
+                <View style={styles.primaryStarBadge}>
+                  <Star size={10} color="#FFF" fill="#FFF" />
+                  <Text style={styles.primaryStarText}>ANA</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          ))}
+
+          {photoList.length < 6 ? (
+            <Pressable onPress={choosePhoto} style={styles.emptyPhotoSlot}>
+              <ImagePlus size={22} color={colors.muted} />
+              <Text style={styles.emptySlotText}>Ekle</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+
+      {/* Snapchat Section 3: Interests */}
+      {selectedInterestNames.length > 0 && (
+        <View style={styles.sectionCard}>
+          <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>İlgi Alanlarım</Text>
+          <View style={styles.interestChipsRow}>
+            {selectedInterestNames.map((name, i) => (
+              <View key={i} style={styles.interestChip}>
+                <Text style={styles.interestChipText}>#{name}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* Snapchat Section 4: Settings & Visibility Switch */}
+      <View style={styles.sectionCard}>
+        <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>Hesap & Gizlilik</Text>
+
+        <View style={styles.groupedCell}>
+          <View style={styles.groupedCellLeft}>
+            <Globe size={18} color={colors.violet} />
+            <View style={{ marginLeft: 12 }}>
+              <Text style={styles.cellTitle}>Keşfette Görünürlük</Text>
+              <Text style={styles.cellSub}>Profilin açık ve herkes seni bulabilir</Text>
+            </View>
+          </View>
+          <Switch
+            value={p?.isProfileVisible}
+            onValueChange={val => visible.mutate(val)}
+            trackColor={{ false: '#DDD', true: colors.violet }}
+            thumbColor="#FFF"
+          />
+        </View>
+
+        <Pressable onPress={() => router.push('/settings')} style={styles.groupedNavCell}>
+          <View style={styles.groupedCellLeft}>
+            <Shield size={18} color={colors.ink} />
+            <Text style={[styles.cellTitle, { marginLeft: 12 }]}>Gizlilik ve Güvenlik Ayarları</Text>
+          </View>
+          <ChevronRight size={18} color={colors.muted} />
+        </Pressable>
+
+        <Pressable
+          onPress={() =>
+            Alert.alert('Çıkış Yap', 'Oturumunu kapatmak istediğine emin misin?', [
+              { text: 'Vazgeç', style: 'cancel' },
+              { text: 'Çıkış Yap', style: 'destructive', onPress: () => signOut() },
+            ])
+          }
+          style={[styles.groupedNavCell, { borderBottomWidth: 0 }]}
+        >
+          <View style={styles.groupedCellLeft}>
+            <LogOut size={18} color={colors.red} />
+            <Text style={[styles.cellTitle, { marginLeft: 12, color: colors.red }]}>Oturumu Kapat</Text>
+          </View>
+        </Pressable>
+      </View>
+    </Screen>
+  );
 }
 
-function Row({ icon, title, detail, onPress }: { icon: React.ReactNode; title: string; detail: string; onPress: () => void }) {
-  return <Pressable onPress={onPress} style={s.row}>{icon}<View style={{ flex: 1 }}><Text style={s.rowTitle}>{title}</Text><Text style={s.rowDetail}>{detail}</Text></View><ChevronRight size={18} color={colors.faint} /></Pressable>;
-}
-
-const s = StyleSheet.create({
-  screen: { paddingHorizontal: 22, paddingTop: 8 }, topLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }, eyebrow: { color: colors.violet, fontSize: 9, fontWeight: '900', letterSpacing: 1.4 }, pageTitle: { color: colors.ink, fontSize: 28, fontWeight: '900', letterSpacing: -.8, marginTop: 4 }, settingsButton: { height: 44, width: 44, borderRadius: 16, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
-  hero: { padding: 17 }, heroTop: { flexDirection: 'row', alignItems: 'center', gap: 13 }, avatarRing: { padding: 3, borderRadius: 45, borderWidth: 2, borderColor: colors.line, position: 'relative' }, avatarRingActive: { borderColor: colors.coral }, storyDot: { position: 'absolute', right: -2, bottom: 0, height: 19, minWidth: 19, borderRadius: 10, backgroundColor: colors.violet, borderWidth: 2, borderColor: colors.white, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 }, storyDotText: { color: colors.white, fontSize: 9, fontWeight: '900' }, identity: { flex: 1 }, name: { color: colors.ink, fontSize: 18, fontWeight: '900' }, handle: { color: colors.muted, fontSize: 11, marginTop: 4 }, location: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 }, locationText: { color: colors.violet, fontSize: 11, fontWeight: '700' }, editButton: { width: 36, height: 36, borderRadius: 13, backgroundColor: colors.paleViolet, alignItems: 'center', justifyContent: 'center' }, bio: { color: colors.ink, fontSize: 12, lineHeight: 18, marginTop: 17 },
-  progressHead: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 17, marginBottom: 7 }, progressTitle: { color: colors.ink, fontSize: 10, fontWeight: '800' }, progressValue: { color: colors.violet, fontSize: 10, fontWeight: '900' }, progressTrack: { height: 6, borderRadius: 4, backgroundColor: '#EEEAF8', overflow: 'hidden' }, progressFill: { height: 6, backgroundColor: colors.violet, borderRadius: 4 }, photoSection: { marginTop: 9 }, photoUploadStatus: { color: colors.violet, fontSize: 11, fontWeight: '700', marginTop: 8 }, photoUploadError: { color: colors.red, fontSize: 11, fontWeight: '700', marginTop: 8 }, photoCount: { color: colors.muted, fontSize: 11, fontWeight: '600' }, photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 }, photoTile: { width: 76, height: 84, borderRadius: 15, overflow: 'hidden', backgroundColor: '#E7E1FB' }, primaryBadge: { position: 'absolute', left: 5, bottom: 5, flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#33265DCC', paddingHorizontal: 6, paddingVertical: 4, borderRadius: 8 }, badgeText: { color: colors.white, fontSize: 8, fontWeight: '900' }, photoMenu: { position: 'absolute', right: 5, top: 5, borderRadius: 8, backgroundColor: '#33265DCC', width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }, photoMenuText: { color: colors.white, fontSize: 10, fontWeight: '900' }, addTile: { width: 76, height: 84, borderRadius: 15, borderWidth: 1, borderColor: '#DCD5F3', borderStyle: 'dashed', backgroundColor: '#FAF9FE', alignItems: 'center', justifyContent: 'center', gap: 7 }, addText: { color: colors.violet, fontSize: 9, fontWeight: '800' }, disabled: { opacity: .6 }, visibility: { marginTop: 17 },
-  interestCard: { padding: 15 }, sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }, cardHeading: { color: colors.ink, fontSize: 13, fontWeight: '900', flex: 1 }, editLink: { color: colors.violet, fontSize: 11, fontWeight: '800' }, chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 }, chip: { backgroundColor: colors.paleViolet, borderRadius: 14, paddingVertical: 7, paddingHorizontal: 10 }, chipText: { color: colors.violet, fontSize: 10, fontWeight: '700' }, muted: { color: colors.muted, fontSize: 11, lineHeight: 16 }, heading: { color: colors.ink, fontSize: 17, fontWeight: '900' }, gap: { marginTop: 14 }, rows: { marginTop: -7, marginBottom: 22 }, row: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: 13, borderBottomWidth: 1, borderBottomColor: colors.line }, rowTitle: { fontSize: 13, color: colors.ink, fontWeight: '800' }, rowDetail: { fontSize: 10, color: colors.muted, marginTop: 4 },
+const styles = StyleSheet.create({
+  screen: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 40 },
+  snapTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  headerIconButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: 9,
+    right: 9,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.coral,
+  },
+  topBarTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: colors.ink,
+    letterSpacing: -0.4,
+  },
+  snapHero: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginBottom: 20,
+  },
+  avatarTouchTarget: {
+    position: 'relative',
+    marginBottom: 12,
+  },
+  snapHeroRing: {
+    width: 106,
+    height: 106,
+    borderRadius: 53,
+    padding: 3.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#FF4500',
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  snapHeroInner: {
+    width: 98,
+    height: 98,
+    borderRadius: 49,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  snapStoryCountBadge: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: '#FF007A',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  snapStoryCountText: { color: '#FFF', fontSize: 10, fontWeight: '900' },
+  snapNormalRing: {
+    width: 102,
+    height: 102,
+    borderRadius: 51,
+    borderWidth: 2,
+    borderColor: colors.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  snapVipRing: {
+    borderColor: '#FFDF00',
+    shadowColor: '#FFDF00',
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  snapAddBadge: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.violet,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  snapNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  snapDisplayName: {
+    fontSize: 24,
+    fontWeight: '900',
+    letterSpacing: -0.6,
+    color: colors.ink,
+  },
+  snapVipBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  snapVipBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '900' },
+  snapHandleText: {
+    fontSize: 13,
+    color: colors.muted,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  snapBioText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.ink,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    fontStyle: 'italic',
+    marginBottom: 16,
+  },
+  snapBioPlaceholder: {
+    fontSize: 13,
+    color: colors.violet,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  snapActionPillsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  snapPillPrimary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.violet,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+  },
+  snapPillPrimaryText: { color: '#FFF', fontSize: 13, fontWeight: '800' },
+  snapPillSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+  },
+  snapPillSecondaryText: { color: colors.ink, fontSize: 13, fontWeight: '800' },
+  snapPillVip: {
+    backgroundColor: '#FFFDF0',
+    borderColor: '#FFDF00',
+  },
+  sectionCard: {
+    backgroundColor: colors.white,
+    borderRadius: 24,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: colors.line,
+    marginBottom: 16,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sectionTitle: { fontSize: 16, fontWeight: '900', color: colors.ink },
+  sectionActionText: { fontSize: 12, fontWeight: '800', color: colors.violet },
+  photoCountText: { fontSize: 12, color: colors.muted, fontWeight: '700' },
+  activeStoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 6,
+  },
+  storyThumbWrapper: {
+    width: 50,
+    height: 60,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#1E1B2E',
+  },
+  storyThumbFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  activeStoryTitle: { fontSize: 14, fontWeight: '900', color: colors.ink },
+  activeStorySubtitle: { fontSize: 11, color: colors.muted, marginTop: 2 },
+  storyWatchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.paleViolet,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  storyWatchBtnText: { fontSize: 11, fontWeight: '800', color: colors.violet },
+  noStoryBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  noStoryPlus: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.paleViolet,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noStoryTitle: { fontSize: 14, fontWeight: '800', color: colors.ink },
+  noStorySub: { fontSize: 11, color: colors.muted, marginTop: 2 },
+  uploadingNotice: { fontSize: 11, color: colors.violet, fontWeight: '700', marginBottom: 8 },
+  uploadErrorNotice: { fontSize: 11, color: colors.red, marginBottom: 8 },
+  photoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  photoGridSlot: {
+    width: (SCREEN_WIDTH - 32 - 36 - 16) / 3,
+    aspectRatio: 0.85,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: colors.paleViolet,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  emptyPhotoSlot: {
+    width: (SCREEN_WIDTH - 32 - 36 - 16) / 3,
+    aspectRatio: 0.85,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#D4CEE8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  emptySlotText: { fontSize: 11, fontWeight: '800', color: colors.muted },
+  primaryStarBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(23, 19, 41, 0.75)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  primaryStarText: { color: '#FFF', fontSize: 8, fontWeight: '900' },
+  interestChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  interestChip: {
+    backgroundColor: colors.canvas,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  interestChipText: { fontSize: 12, fontWeight: '700', color: colors.muted },
+  groupedCell: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  groupedNavCell: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+  },
+  groupedCellLeft: { flexDirection: 'row', alignItems: 'center' },
+  cellTitle: { fontSize: 14, fontWeight: '800', color: colors.ink },
+  cellSub: { fontSize: 11, color: colors.muted, marginTop: 2 },
 });
