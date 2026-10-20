@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5193').replace(/\/$/, '');
 const ACCESS_KEY = 'mindmatch.access';
@@ -9,11 +10,26 @@ export class ApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); this.name = 'ApiError'; }
 }
 
+const tokenStorage = {
+  get(key: string) {
+    if (Platform.OS === 'web') return Promise.resolve(typeof localStorage === 'undefined' ? null : localStorage.getItem(key));
+    return SecureStore.getItemAsync(key);
+  },
+  set(key: string, value: string) {
+    if (Platform.OS === 'web') { if (typeof localStorage !== 'undefined') localStorage.setItem(key, value); return Promise.resolve(); }
+    return SecureStore.setItemAsync(key, value);
+  },
+  delete(key: string) {
+    if (Platform.OS === 'web') { if (typeof localStorage !== 'undefined') localStorage.removeItem(key); return Promise.resolve(); }
+    return SecureStore.deleteItemAsync(key);
+  },
+};
+
 export const sessionTokens = {
-  async access() { return SecureStore.getItemAsync(ACCESS_KEY); },
-  async refresh() { return SecureStore.getItemAsync(REFRESH_KEY); },
-  async save(access: string, refresh: string) { await Promise.all([SecureStore.setItemAsync(ACCESS_KEY, access), SecureStore.setItemAsync(REFRESH_KEY, refresh)]); },
-  async clear() { await Promise.all([SecureStore.deleteItemAsync(ACCESS_KEY), SecureStore.deleteItemAsync(REFRESH_KEY)]); }
+  async access() { return tokenStorage.get(ACCESS_KEY); },
+  async refresh() { return tokenStorage.get(REFRESH_KEY); },
+  async save(access: string, refresh: string) { await Promise.all([tokenStorage.set(ACCESS_KEY, access), tokenStorage.set(REFRESH_KEY, refresh)]); },
+  async clear() { await Promise.all([tokenStorage.delete(ACCESS_KEY), tokenStorage.delete(REFRESH_KEY)]); }
 };
 
 async function rotateToken() {
@@ -21,7 +37,7 @@ async function rotateToken() {
     const refreshToken = await sessionTokens.refresh();
     if (!refreshToken) return null;
     try {
-      const response = await fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }) });
+      const response = await fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }), signal: AbortSignal.timeout(15000) });
       if (!response.ok) { await sessionTokens.clear(); return null; }
       const auth = await response.json();
       await sessionTokens.save(auth.accessToken, auth.refreshToken);
@@ -37,12 +53,14 @@ export async function api<T>(path: string, options: RequestInit = {}, allowRefre
   if (access) headers.set('Authorization', `Bearer ${access}`);
   if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   let response: Response;
-  try { response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: options.signal || AbortSignal.timeout(20000) }); }
+  const isFileUpload = options.body instanceof FormData;
+  try { response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: options.signal || AbortSignal.timeout(isFileUpload ? 120000 : 20000) }); }
   catch (error) { throw new ApiError(error instanceof Error && error.name === 'TimeoutError' ? 'Sunucu zaman aşımına uğradı.' : 'Sunucuya bağlanılamadı. API adresini ve tüneli kontrol et.', 0); }
   if (response.status === 401 && allowRefresh && access) {
     const next = await rotateToken();
     if (next) return api<T>(path, options, false);
     await sessionTokens.clear();
+    throw new ApiError('Oturum yenilenemedi. Yeniden giriş yapıp tekrar dene.', 401);
   }
   if (!response.ok) {
     const body = await response.json().catch(() => null);

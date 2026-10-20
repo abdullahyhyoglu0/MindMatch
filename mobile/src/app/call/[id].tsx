@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { createElement, useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ComponentType } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
@@ -10,10 +10,10 @@ import { callApi } from '../../api/mindmatch';
 import { connectCalls, stopCalls } from '../../realtime/hub';
 import { colors } from '../../theme/tokens';
 
-const expoGo = Constants.executionEnvironment === 'storeClient';
+const expoGo = Constants.executionEnvironment === 'storeClient' && Platform.OS !== 'web';
 
-type Peer = import('react-native-webrtc').RTCPeerConnection;
-type Media = import('react-native-webrtc').MediaStream;
+type Peer = RTCPeerConnection;
+type Media = MediaStream & { toURL?: () => string };
 type RtcViewProps = { streamURL: string; style?: object; objectFit?: 'cover' | 'contain'; mirror?: boolean };
 type IceCandidateInit = { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null };
 type SessionDescriptionInit = { sdp: string; type: string | null };
@@ -42,7 +42,7 @@ export default function CallScreen() {
   async function setRemoteDescriptionAndDrain(description: SessionDescriptionInit) {
     const peer = peerRef.current;
     if (!peer) return;
-    await peer.setRemoteDescription(description);
+    await peer.setRemoteDescription(description as RTCSessionDescriptionInit);
     const candidates = candidateQueue.current.splice(0);
     await Promise.all(candidates.map(candidate => peer.addIceCandidate(candidate).catch(() => {})));
   }
@@ -74,9 +74,9 @@ export default function CallScreen() {
 
     async function setup() {
       try {
-        const rtc = await import('react-native-webrtc');
+        const rtc = Platform.OS === 'web' ? null : await import('react-native-webrtc');
         if (!active) return;
-        setRtcView(() => rtc.RTCView as ComponentType<RtcViewProps>);
+        if (rtc) setRtcView(() => rtc.RTCView as ComponentType<RtcViewProps>);
         const hub = await connectCalls();
         if (!hub || !active) throw new Error('Arama sunucusuna bağlanılamadı.');
         hubRef.current = hub;
@@ -119,18 +119,21 @@ export default function CallScreen() {
 
         const credentials = await callApi.credentials();
         if (!active) return;
-        const peer = new rtc.RTCPeerConnection({
+        const peer = (rtc ? new rtc.RTCPeerConnection({
           iceTransportPolicy: 'relay',
           iceServers: [{ urls: credentials.urls, username: credentials.username, credential: credentials.credential }],
-        });
+        }) : new RTCPeerConnection({
+          iceTransportPolicy: 'relay',
+          iceServers: [{ urls: credentials.urls, username: credentials.username, credential: credentials.credential }],
+        })) as unknown as Peer;
         peerRef.current = peer;
         peer.onicecandidate = rawEvent => {
-          const event = rawEvent as unknown as { candidate: import('react-native-webrtc').RTCIceCandidate | null };
+          const event = rawEvent as unknown as { candidate: RTCIceCandidate | null };
           if (event.candidate && hub.state === 'Connected') hub.invoke('SendIceCandidate', id, JSON.stringify(event.candidate.toJSON())).catch(() => {});
         };
         peer.ontrack = rawEvent => {
-          const event = rawEvent as unknown as { streams: Media[] };
-          if (event.streams[0]) setRemoteStream(event.streams[0]);
+          const event = rawEvent as unknown as { streams: MediaStream[] };
+          if (event.streams[0]) setRemoteStream(event.streams[0] as Media);
         };
         peer.onconnectionstatechange = () => {
           if (!active) return;
@@ -140,7 +143,10 @@ export default function CallScreen() {
           if (peer.connectionState === 'disconnected') setMessage('Bağlantı kesildi, yeniden bağlanılıyor…');
         };
 
-        const stream = await rtc.mediaDevices.getUserMedia({ audio: true, video: isVideo ? { facingMode: 'user', width: 720, height: 1280, frameRate: 24 } : false });
+        const videoConstraints = isVideo ? { facingMode: 'user', width: 720, height: 1280, frameRate: 24 } : false;
+        const stream = (rtc
+          ? await rtc.mediaDevices.getUserMedia({ audio: true, video: videoConstraints } as any)
+          : await navigator.mediaDevices.getUserMedia({ audio: true, video: videoConstraints })) as unknown as Media;
         if (!active) { stream.getTracks().forEach(track => track.stop()); return; }
         streamRef.current = stream;
         setLocalStream(stream);
@@ -205,7 +211,14 @@ export default function CallScreen() {
     setCameraEnabled(next);
   }
   function switchCamera() {
-    streamRef.current?.getVideoTracks().forEach(track => (track as any)._switchCamera?.());
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    if (Platform.OS === 'web') {
+      const facingMode = track.getSettings().facingMode === 'environment' ? 'user' : 'environment';
+      track.applyConstraints({ facingMode }).catch(() => setMessage('Bu kamera yönü kullanılamıyor.'));
+      return;
+    }
+    (track as any)._switchCamera?.();
   }
 
   if (expoGo) return <View style={[styles.page, { paddingTop: insets.top + 27, paddingBottom: insets.bottom + 27 }]}>
@@ -216,9 +229,11 @@ export default function CallScreen() {
   </View>;
 
   const StreamView = rtcView;
-  const remoteUrl = remoteStream?.toURL();
-  const localUrl = localStream?.toURL();
+  const remoteUrl = remoteStream?.toURL?.();
+  const localUrl = localStream?.toURL?.();
   return <View style={styles.page}>
+    {Platform.OS === 'web' && isVideo && remoteStream ? <BrowserVideo stream={remoteStream} style={StyleSheet.absoluteFill} /> : null}
+    {Platform.OS === 'web' && isVideo && localStream && !connected ? <BrowserVideo stream={localStream} muted style={[styles.localVideo, { top: insets.top + 12 }]} /> : null}
     {isVideo && remoteUrl && StreamView ? <StreamView streamURL={remoteUrl} style={StyleSheet.absoluteFill} objectFit="cover" /> : null}
     {isVideo && localUrl && StreamView && !connected ? <StreamView streamURL={localUrl} style={[styles.localVideo, { top: insets.top + 12 }]} objectFit="cover" mirror /> : null}
     <View style={[styles.overlay, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]} pointerEvents="box-none">
@@ -237,6 +252,20 @@ export default function CallScreen() {
       </View>
     </View>
   </View>;
+}
+
+function BrowserVideo({ stream, style, muted = false }: { stream: MediaStream; style: object; muted?: boolean }) {
+  return createElement('video', {
+    ref: (video: HTMLVideoElement | null) => {
+      if (!video) return;
+      video.srcObject = stream;
+      void video.play().catch(() => {});
+    },
+    autoPlay: true,
+    playsInline: true,
+    muted,
+    style,
+  });
 }
 
 function Control({ icon, title, onPress, active = false }: { icon: React.ReactNode; title: string; onPress: () => void; active?: boolean }) {

@@ -15,7 +15,9 @@ const tokenStore = {
 const state = {
   user: null, profile: null, section: 'discover', candidates: [], matches: [],
   conversations: [], currentConversation: null, messages: [], requests: [],
-  notifications: [], stories: [], mood: null, hub: null, busy: false
+  notifications: [], stories: [], myStories: [], mood: null, hub: null, busy: false,
+  people: new Map(), presence: new Map(), storyViewers: [],
+  storyIndex: 0, interests: [], photos: [], music: { genres: [] }, blocked: []
 };
 
 const icons = {
@@ -142,7 +144,7 @@ async function startApp() {
     [state.user, state.profile] = await Promise.all([
       request('/api/auth/me'), request('/api/profiles/me')
     ]);
-    await loadSection('discover');
+    await Promise.all([loadInterests(), loadSection('discover')]);
     connectRealtime();
     loadNotifications().then(renderApp).catch(() => {});
     renderApp();
@@ -185,7 +187,7 @@ async function loadSection(section) {
     if (section === 'requests') await loadRequests();
     if (section === 'matches') await loadMatches();
     if (section === 'stories') await loadStories();
-    if (section === 'profile') state.profile = await request('/api/profiles/me');
+    if (section === 'profile') { state.profile = await request('/api/profiles/me'); await loadProfileExtras(); }
     if (section === 'notifications') await loadNotifications();
   } catch (error) { showToast(error.message, 'error'); }
   renderApp();
@@ -217,14 +219,24 @@ async function loadConversations(selectedId) {
     state.currentConversation = null; state.messages = []; return;
   }
   state.currentConversation = state.conversations.find(item => item.id === selectedId) || state.conversations[0];
+  const ids = [...new Set(state.conversations.map(x => x.otherUserId))];
+  await Promise.all(ids.map(async id => {
+    try {
+      const [person, presence] = await Promise.all([request(`/api/profiles/${id}`), request(`/api/presence/${id}`)]);
+      state.people.set(id, person); state.presence.set(id, presence);
+    } catch { state.people.set(id, { userId: id, displayName: 'MindMatch üyesi' }); }
+  }));
   const page = await request(`/api/conversations/${state.currentConversation.id}/messages?pageSize=50`);
   state.messages = (page.items || []).reverse();
+  await Promise.allSettled(state.messages.filter(m=>m.senderId!==state.user.userId&&m.status!==3).map(m=>request(`/api/messages/${m.id}/read`,{method:'POST'})));
   if (state.hub?.state === 'Connected') {
     try { await state.hub.invoke('JoinConversation', state.currentConversation.id); } catch { /* REST remains available */ }
   }
 }
-async function loadStories() { state.stories = await request('/api/stories/feed?take=30'); }
+async function loadStories() { [state.stories,state.myStories]=await Promise.all([request('/api/stories/feed?take=30'),request('/api/stories/me')]); await Promise.allSettled([...new Set(state.stories.map(x=>x.userId))].map(async id=>state.people.set(id,await request(`/api/profiles/${id}`)))); }
 async function loadNotifications() { state.notifications = await request('/api/notifications?pageSize=40'); }
+async function loadInterests(){try{state.interests=await request('/api/interests');}catch{state.interests=[];}}
+async function loadProfileExtras(){const results=await Promise.allSettled([request('/api/profiles/me/photos'),request('/api/preferences/music'),request('/api/interests'),request('/api/blocks')]);if(results[0].status==='fulfilled')state.photos=results[0].value;if(results[1].status==='fulfilled')state.music=results[1].value;if(results[2].status==='fulfilled')state.interests=results[2].value;if(results[3].status==='fulfilled')state.blocked=results[3].value;}
 
 function renderApp() {
   if (!state.user) return;
@@ -292,11 +304,14 @@ function renderCandidate(person) {
 }
 
 function renderChats() {
-  const list = state.conversations.map(item => `<button class="conversation-row ${state.currentConversation?.id === item.id ? 'active' : ''}" data-action="select-conversation" data-id="${item.id}">${avatar(item.otherUserId, 'blue')}<span class="conversation-meta"><strong>Kullanıcı ${escapeHtml(String(item.otherUserId).slice(0, 6))}</strong><small>${item.lastMessageAtUtc ? new Date(item.lastMessageAtUtc).toLocaleString('tr-TR') : 'Sohbet başladı'}</small></span><span class="row-arrow">›</span></button>`).join('');
+  const list = state.conversations.map(item => { const p=state.people.get(item.otherUserId)||{}; const name=p.displayName||'MindMatch üyesi'; return `<button class="conversation-row ${state.currentConversation?.id === item.id ? 'active' : ''}" data-action="select-conversation" data-id="${item.id}">${avatar(name, 'blue')}<span class="conversation-meta"><strong>${escapeHtml(name)}</strong><small>${item.lastMessageAtUtc ? new Date(item.lastMessageAtUtc).toLocaleString('tr-TR') : 'Sohbet başladı'}</small></span><span class="row-arrow">›</span></button>`; }).join('');
   if (!state.conversations.length) return `<section class="page-heading"><div><span class="eyebrow">BAĞLANTILARIN</span><h1>Sohbetler</h1><p>Tanışmaların burada sohbete dönüşür.</p></div></section>${emptyBlock('◌', 'Henüz sohbetin yok', 'Bir eşleşme ya da kabul edilmiş mesaj isteği sonrası sohbet burada görünür.', 'Keşfet', 'discover')}`;
   const conversation = state.currentConversation;
-  return `<section class="page-heading compact"><div><span class="eyebrow">BAĞLANTILARIN</span><h1>Sohbetler</h1></div><span class="muted">${state.conversations.length} aktif sohbet</span></section><div class="chat-shell"><aside class="conversation-list">${list}</aside><section class="chat-panel"><header class="chat-header">${avatar(conversation.otherUserId, 'blue')}<div><strong>Kullanıcı ${escapeHtml(String(conversation.otherUserId).slice(0, 6))}</strong><small>MindMatch sohbeti</small></div><span class="secure-label">● Güvenli sohbet</span></header><div class="message-list" id="message-list">${state.messages.length ? state.messages.map(renderMessage).join('') : '<div class="chat-empty">İlk mesajı sen gönder, sohbet başlasın ✨</div>'}</div><form class="composer" id="message-form"><input name="content" maxlength="5000" placeholder="Güzel bir sohbet başlat…" autocomplete="off" required /><button class="send-button" aria-label="Mesaj gönder">${icons.send}</button></form></section></div>`;
+  const person=state.people.get(conversation.otherUserId)||{}; const name=person.displayName||'MindMatch üyesi'; const presence=state.presence.get(conversation.otherUserId)||{};
+  const presenceText=presence.isOnline?'Şu an çevrimiçi':presence.lastSeenAtUtc?`Son görülme ${relativeTime(presence.lastSeenAtUtc)}`:'MindMatch sohbeti';
+  return `<section class="page-heading compact"><div><span class="eyebrow">BAĞLANTILARIN</span><h1>Sohbetler</h1></div><span class="muted">${state.conversations.length} aktif sohbet</span></section><div class="chat-shell"><aside class="conversation-list">${list}</aside><section class="chat-panel"><header class="chat-header">${avatar(name, 'blue')}<div><strong>${escapeHtml(name)}</strong><small class="presence ${presence.isOnline?'online':''}">${escapeHtml(presenceText)}</small></div><button class="icon-button chat-more" data-action="person-menu" data-id="${conversation.otherUserId}" aria-label="Sohbet seçenekleri">•••</button></header><div class="message-list" id="message-list">${state.messages.length ? state.messages.map(renderMessage).join('') : '<div class="chat-empty">İlk mesajı sen gönder, sohbet başlasın ✨</div>'}</div><form class="composer" id="message-form"><input name="content" maxlength="5000" placeholder="Güzel bir sohbet başlat…" autocomplete="off" required /><button class="send-button" aria-label="Mesaj gönder">${icons.send}</button></form></section></div>`;
 }
+function relativeTime(value){const m=Math.max(0,Math.floor((Date.now()-new Date(value).getTime())/60000)); if(m<1)return 'az önce'; if(m<60)return `${m} dk. önce`; const h=Math.floor(m/60); if(h<24)return `${h} sa. önce`; return `${Math.floor(h/24)} gün önce`;}
 
 function renderMessage(message) {
   const mine = message.senderId === state.user.userId;
@@ -323,13 +338,20 @@ function renderMatches() {
 }
 
 function renderStories() {
-  const cards = state.stories.map(story => `<article class="story-card ${story.hasViewed ? 'viewed' : ''}"><div class="story-ring">${avatar(story.userId, story.mediaType === 1 ? 'peach' : 'blue', 'large')}</div><strong>Kullanıcı ${escapeHtml(String(story.userId).slice(0, 6))}</strong><small>${story.hasViewed ? 'Görüldü' : 'Yeni hikâye'}</small><p>${escapeHtml(story.caption || (story.mediaType === 1 ? 'Fotoğraf hikâyesi' : 'Video hikâyesi'))}</p><button class="button secondary full" data-action="view-story" data-id="${story.id}" ${story.hasViewed ? 'disabled' : ''}>${story.hasViewed ? 'Görüldü' : 'Görüntüle'}</button></article>`).join('');
-  return `<section class="page-heading"><div><span class="eyebrow">24 SAAT SENİNLE</span><h1>Hikâyeler</h1><p>Bağlantılarının küçük anlarına göz at.</p></div><button class="button subtle" data-action="reload-stories">↻ Yenile</button></section><div class="story-grid">${cards || emptyBlock('◉', 'Şu an hikâye yok', 'Bağlantılarının paylaştığı hikâyeler burada görünür.')}</div>`;
+  const cards=state.stories.map((s,i)=>`<button class="story-bubble ${s.hasViewed?'viewed':''}" data-action="open-story" data-index="${i}"><span class="story-ring">${avatar(state.people.get(s.userId)?.displayName||'M','peach','large')}</span><strong>${escapeHtml(state.people.get(s.userId)?.displayName||'Hikâye')}</strong></button>`).join('');
+  return `<section class="page-heading"><div><span class="eyebrow">24 SAAT SENİNLE</span><h1>Hikâyeler</h1><p>Günün küçük anlarını paylaş ve bağlantılarını yakala.</p></div><button class="button primary" data-action="new-story">＋ Hikâye ekle</button></section><div class="story-strip"><button class="story-bubble own-story" data-action="new-story"><span class="own-add">＋</span><strong>Hikâyen</strong></button>${state.myStories.map(s=>`<button class="story-bubble" data-action="my-story-viewers" data-id="${s.id}"><span class="story-ring">${avatar(state.profile?.displayName||'Ben','lilac','large')}</span><strong>${escapeHtml(s.caption||'Benim anım')}</strong></button>`).join('')}${cards}</div><div class="story-grid">${state.stories.length?state.stories.map(s=>`<article class="story-card ${s.hasViewed?'viewed':''}"><div class="story-ring">${avatar(state.people.get(s.userId)?.displayName||'M','blue','large')}</div><strong>${escapeHtml(state.people.get(s.userId)?.displayName||'Yeni hikâye')}</strong><small>${s.hasViewed?'Görüldü':'Yeni hikâye'} · ${relativeTime(s.createdAtUtc)}</small><p>${escapeHtml(s.caption||'Paylaşılan bir an')}</p><button class="button secondary full" data-action="open-story" data-id="${s.id}" data-index="${state.stories.indexOf(s)}">Görüntüle</button></article>`).join(''):emptyBlock('◉','Henüz hikâye yok','İlk anını paylaş; bağlantıların 24 saat boyunca görebilsin.')}</div>`;
 }
+
+function showStoryComposer(){const host=document.createElement('div');host.className='modal-backdrop';host.innerHTML=`<form class="modal-card" id="story-upload-form"><button type="button" class="modal-close" data-dismiss>×</button><span class="eyebrow">YENİ BİR AN</span><h2>Hikâyeni paylaş</h2><p class="muted">Fotoğraf veya kısa video yükle. Hikâyen 24 saat sonra kaybolur.</p><label>Medya<input name="file" type="file" accept="image/*,video/*" required></label><label>Bir not ekle<input name="caption" maxlength="500" placeholder="Bu anı özel yapan ne?" /></label><button class="button primary full" type="submit">Hikâyeyi paylaş ↗</button></form>`;document.body.append(host);host.querySelector('[data-dismiss]').onclick=()=>host.remove();host.querySelector('form').addEventListener('submit',submitStory);}
+async function submitStory(event){event.preventDefault();const form=event.currentTarget;const file=form.elements.file.files[0];if(!file)return;const video=file.type.startsWith('video/');try{const data=new FormData();data.append('file',file);const media=await request(`/api/media?category=${video?5:4}`,{method:'POST',body:data});await request('/api/stories',{method:'POST',body:JSON.stringify({mediaAssetId:media.id,mediaType:video?2:1,caption:form.elements.caption.value||null})});form.closest('.modal-backdrop').remove();await loadStories();renderApp();showToast('Hikâyen 24 saat boyunca paylaşımda ✨','success');}catch(error){showToast(error.message,'error');}}
+async function openStory(index,id){if(id)index=state.stories.findIndex(x=>x.id===id);if(index<0||index>=state.stories.length)return;const story=state.stories[index];try{await request(`/api/stories/${story.id}/view`,{method:'POST'});const src=story.mediaAssetId?`/api/media/${story.mediaAssetId}`:'';const content=story.mediaType===2?`<video src="${src}" autoplay controls playsinline></video>`:`<img src="${src}" alt="Hikâye medyası">`;const layer=document.createElement('div');layer.className='story-viewer';layer.innerHTML=`<div class="story-progress"><i></i></div><button class="story-viewer-close">×</button>${content}<div class="story-viewer-caption">${escapeHtml(story.caption||'')}</div><button class="story-next">›</button>`;document.body.append(layer);const close=()=>{layer.remove();loadStories().then(renderApp);};layer.querySelector('.story-viewer-close').onclick=close;layer.querySelector('.story-next').onclick=()=>{layer.remove();openStory(index+1);};if(index===state.stories.length-1)layer.querySelector('.story-next').hidden=true;setTimeout(()=>{if(layer.isConnected)close();},15000);}catch(error){showToast(error.message,'error');}}
+async function showStoryViewers(id){try{const viewers=await request(`/api/stories/${id}/viewers`);const names=await Promise.all(viewers.slice(0,4).map(async v=>{try{return (await request(`/api/profiles/${v.viewerId}`)).displayName;}catch{return 'MindMatch üyesi';}}));showToast(names.length?`${viewers.length} görüntüleyen · ${names.join(', ')}`:'Henüz görüntüleyen yok');}catch(error){showToast(error.message,'error');}}
+async function uploadProfilePhoto(){const file=document.querySelector('#profile-photo-file')?.files?.[0];if(!file){showToast('Önce bir fotoğraf seç.','error');return;}try{const data=new FormData();data.append('file',file);const media=await request('/api/media?category=1',{method:'POST',body:data});await request('/api/profiles/me/photos',{method:'POST',body:JSON.stringify({mediaAssetId:media.id})});await loadProfileExtras();renderApp();showToast('Profil fotoğrafı eklendi.','success');}catch(error){showToast(error.message,'error');}}
+function showPersonMenu(userId){const layer=document.createElement('div');layer.className='modal-backdrop';layer.innerHTML=`<section class="modal-card"><button class="modal-close" data-close>×</button><span class="eyebrow">SOHBET GÜVENLİĞİ</span><h2>Bu kişiyle ilgili</h2><p class="muted">Deneyimini kontrol et. Raporlar gizli olarak incelenir.</p><button class="button secondary" data-report>Rapor et</button><button class="button secondary" data-block>Bu kişiyi engelle</button></section>`;document.body.append(layer);layer.querySelector('[data-close]').onclick=()=>layer.remove();layer.addEventListener('click',e=>{if(e.target===layer)layer.remove();});layer.querySelector('[data-block]').onclick=async()=>{try{await request(`/api/blocks/${userId}`,{method:'POST'});layer.remove();showToast('Kullanıcı engellendi.','success');await loadConversations();renderApp();}catch(error){showToast(error.message,'error');}};layer.querySelector('[data-report]').onclick=()=>{layer.querySelector('.modal-card').innerHTML=`<button class="modal-close" data-close>×</button><span class="eyebrow">GÜVENLİK RAPORU</span><h2>Rapor et</h2><form id="report-form"><label>Neden<select name="reason"><option value="1">Taciz</option><option value="2">Hakaret</option><option value="3">Cinsel içerik</option><option value="4">Spam</option><option value="5">Sahte profil</option><option value="6">Tehdit</option><option value="7">Uygunsuz medya</option><option value="8">Diğer</option></select></label><label>Açıklama<textarea name="description" maxlength="1000" rows="3" placeholder="İstersen ayrıntı ekle"></textarea></label><button class="button primary full">Gizli raporu gönder</button></form>`;layer.querySelector('[data-close]').onclick=()=>layer.remove();layer.querySelector('#report-form').onsubmit=async e=>{e.preventDefault();const fd=new FormData(e.currentTarget);try{await request('/api/reports',{method:'POST',body:JSON.stringify({reportedUserId:userId,reason:Number(fd.get('reason')),description:fd.get('description')||null,conversationId:state.currentConversation?.id||null,messageIds:[]})});layer.remove();showToast('Raporun güvenli ekibe iletildi.','success');}catch(error){showToast(error.message,'error');}};};}
 
 function renderProfile() {
   const profile = state.profile || {};
-  return `<section class="page-heading"><div><span class="eyebrow">KENDİNİ ANLAT</span><h1>Profilin, <em>senin alanın.</em></h1><p>Tanışmaların seni doğru yansıtması için bilgilerini güncel tut.</p></div></section><div class="profile-editor"><div class="profile-preview">${avatar(profile.displayName || state.user.email, 'lilac', 'xl')}<h2>${escapeHtml(profile.displayName || 'İsmini ekle')}</h2><span>@${escapeHtml(profile.nickname || 'kullanici.adi')}</span><p>${escapeHtml(profile.bio || 'Kısa bir biyografi ekle ve insanlara kendinden biraz bahset.')}</p><div class="preview-state ${profile.isProfileVisible ? 'visible' : ''}"><i></i>${profile.isProfileVisible ? 'Profilin keşifte görünür' : 'Profilin şu an gizli'}</div></div><form class="profile-form" id="profile-form"><label>Görünen ad<input name="displayName" maxlength="40" value="${escapeHtml(profile.displayName || '')}" required /></label><label>Kullanıcı adı<input name="nickname" maxlength="30" value="${escapeHtml(profile.nickname || '')}" placeholder="ornek.kullanici" /></label><label>Şehir<input name="city" maxlength="100" value="${escapeHtml(profile.city || '')}" placeholder="İstanbul" /></label><label>Biyografi<textarea name="bio" maxlength="300" rows="4" placeholder="Neleri sevdiğinden bahset…">${escapeHtml(profile.bio || '')}</textarea></label><label class="toggle-row"><span><strong>Profilimi keşifte göster</strong><small>Profil görünürlüğü mesaj izni anlamına gelmez.</small></span><input type="checkbox" name="visible" ${profile.isProfileVisible ? 'checked' : ''} /></label><label class="toggle-row"><span><strong>Mesaj isteği kabul et</strong><small>Eşleşmediğin kişiler sana istek gönderebilir.</small></span><input type="checkbox" name="allowRequests" ${profile.allowMessageRequests ? 'checked' : ''} /></label><button class="button primary" type="submit">Değişiklikleri kaydet <span>↗</span></button></form></div>`;
+  return `<section class="page-heading"><div><span class="eyebrow">KENDİNİ ANLAT</span><h1>Profilin, <em>senin alanın.</em></h1><p>Tanışmaların seni doğru yansıtması için bilgilerini güncel tut.</p></div></section><div class="profile-editor"><div class="profile-preview">${avatar(profile.displayName || state.user.email, 'lilac', 'xl')}<h2>${escapeHtml(profile.displayName || 'İsmini ekle')}</h2><span>@${escapeHtml(profile.nickname || 'kullanici.adi')}</span><p>${escapeHtml(profile.bio || 'Kısa bir biyografi ekle ve insanlara kendinden biraz bahset.')}</p><div class="preview-state ${profile.isProfileVisible ? 'visible' : ''}"><i></i>${profile.isProfileVisible ? 'Profilin keşifte görünür' : 'Profilin şu an gizli'}</div></div><form class="profile-form" id="profile-form"><label>Görünen ad<input name="displayName" maxlength="40" value="${escapeHtml(profile.displayName || '')}" required /></label><label>Kullanıcı adı<input name="nickname" maxlength="30" value="${escapeHtml(profile.nickname || '')}" placeholder="ornek.kullanici" /></label><label>Şehir<input name="city" maxlength="100" value="${escapeHtml(profile.city || '')}" placeholder="İstanbul" /></label><label>Biyografi<textarea name="bio" maxlength="300" rows="4" placeholder="Neleri sevdiğinden bahset…">${escapeHtml(profile.bio || '')}</textarea></label><section class="profile-section"><h3>İlgi alanların</h3><div class="interest-picker">${state.interests.map(i=>`<label><input type="checkbox" name="interestIds" value="${i.id}" ${(profile.interestIds||[]).includes(i.id)?'checked':''}><span>${escapeHtml(i.name)}</span></label>`).join('')||'<small>İlgi alanı bulunamadı.</small>'}</div></section><section class="profile-section"><h3>Müzik zevkin</h3><input name="genres" value="${escapeHtml((state.music.genres||[]).join(', '))}" placeholder="Indie, jazz, elektronik"><small>Türleri virgülle ayır.</small></section><section class="profile-section"><h3>Profil fotoğrafları</h3><div class="photo-row">${state.photos.map(p=>`<div class="profile-photo"><img src="/api/media/${p.mediaAssetId}" alt="Profil fotoğrafı"><button type="button" data-action="primary-photo" data-id="${p.id}">${p.isPrimary?'★':'☆'}</button><button type="button" data-action="delete-photo" data-id="${p.id}">×</button></div>`).join('')}</div><input type="file" id="profile-photo-file" accept="image/*"><button type="button" class="button secondary" data-action="upload-profile-photo">Fotoğraf yükle</button></section><label class="toggle-row"><span><strong>Profilimi keşifte göster</strong><small>Profil görünürlüğü mesaj izni anlamına gelmez.</small></span><input type="checkbox" name="visible" ${profile.isProfileVisible ? 'checked' : ''} /></label><label class="toggle-row"><span><strong>Mesaj isteği kabul et</strong><small>Eşleşmediğin kişiler sana istek gönderebilir.</small></span><input type="checkbox" name="allowRequests" ${profile.allowMessageRequests ? 'checked' : ''} /></label>${[['allowCallsFromNonMatches','Eşleşmediğim kişilerden arama kabul et'],['showOnlineStatus','Çevrimiçi durumumu göster'],['showLastSeen','Son görülmemi göster'],['showReadReceipts','Okundu bilgisini göster'],['showPremiumBadge','Premium rozetimi göster']].map(([key,label])=>`<label class="toggle-row"><span><strong>${label}</strong></span><input type="checkbox" name="${key}" ${profile[key]?'checked':''}></label>`).join('')}<button class="button primary" type="submit">Değişiklikleri kaydet <span>↗</span></button></form></div>`;
 }
 
 function renderNotifications() {
@@ -387,11 +409,15 @@ async function handleAction(button) {
         await request(button.dataset.kind === 'match' ? `/api/matches/${id}/reject` : `/api/message-requests/${id}/reject`, { method: 'POST' });
         await loadRequests(); renderApp(); break;
       case 'select-conversation': await loadConversations(id); renderApp(); break;
+      case 'person-menu': showPersonMenu(id); break;
       case 'go-chats': await loadSection('chats'); break;
-      case 'view-story':
-        await request(`/api/stories/${id}/view`, { method: 'POST' });
-        await loadStories(); renderApp(); break;
+      case 'view-story': case 'open-story': await openStory(Number(button.dataset.index)||0,id); break;
+      case 'new-story': showStoryComposer(); break;
+      case 'my-story-viewers': await showStoryViewers(id); break;
       case 'reload-stories': await loadStories(); renderApp(); break;
+      case 'upload-profile-photo': await uploadProfilePhoto(); break;
+      case 'primary-photo': await request(`/api/profiles/me/photos/${id}/primary`,{method:'PUT'}); await loadProfileExtras(); renderApp(); break;
+      case 'delete-photo': await request(`/api/profiles/me/photos/${id}`,{method:'DELETE'}); await loadProfileExtras(); renderApp(); break;
       case 'read-notification':
         await request(`/api/notifications/${id}/read`, { method: 'POST' });
         await loadNotifications(); renderApp(); break;
@@ -432,13 +458,15 @@ async function saveProfile(event) {
       minimumMatchAge: state.profile.minimumMatchAge || null, maximumMatchAge: state.profile.maximumMatchAge || null
     }) });
     await request(`/api/profiles/me/visibility?isVisible=${fields.has('visible')}`, { method: 'PATCH' });
+    await request('/api/interests/me',{method:'PUT',body:JSON.stringify({interestIds:fields.getAll('interestIds')})});
+    await request('/api/preferences/music',{method:'PUT',body:JSON.stringify({genres:(fields.get('genres')||'').split(',').map(x=>x.trim()).filter(Boolean)})});
     await request('/api/profiles/me/preferences', { method: 'PUT', body: JSON.stringify({
-      allowMessageRequests: fields.has('allowRequests'), allowCallsFromNonMatches: state.profile.allowCallsFromNonMatches,
-      showOnlineStatus: state.profile.showOnlineStatus, showLastSeen: state.profile.showLastSeen,
-      showReadReceipts: state.profile.showReadReceipts, showPremiumBadge: state.profile.showPremiumBadge,
+      allowMessageRequests: fields.has('allowRequests'), allowCallsFromNonMatches: fields.has('allowCallsFromNonMatches'),
+      showOnlineStatus: fields.has('showOnlineStatus'), showLastSeen: fields.has('showLastSeen'),
+      showReadReceipts: fields.has('showReadReceipts'), showPremiumBadge: fields.has('showPremiumBadge'),
       premiumPriorityOptIn: state.profile.premiumPriorityOptIn
     }) });
-    state.profile = await request('/api/profiles/me');
+    state.profile = await request('/api/profiles/me'); await loadProfileExtras();
     showToast('Profilin güncellendi.', 'success'); renderApp();
   } catch (error) { showToast(error.message, 'error'); }
 }

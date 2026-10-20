@@ -18,7 +18,7 @@ public sealed class LocalMediaStorage : IMediaStorage
     public async Task<string> SaveAsync(MediaCategory category, string extension,
         ReadOnlyMemory<byte> content, CancellationToken cancellationToken = default)
     {
-        if (!Enum.IsDefined(category) || extension is not ("jpg" or "png" or "mp3" or "wav" or "ogg" or "webm" or "mp4"))
+        if (!Enum.IsDefined(category) || extension is not ("jpg" or "png" or "mp3" or "wav" or "ogg" or "webm" or "mp4" or "m4a"))
             throw new ArgumentException("Desteklenmeyen medya türü.");
         var key = $"{category.ToString().ToLowerInvariant()}/{Guid.NewGuid():N}.{extension}";
         var path = ResolvePath(key);
@@ -53,7 +53,7 @@ public sealed class LocalMediaStorage : IMediaStorage
         var segments = key.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length != 2 || !Enum.TryParse<MediaCategory>(segments[0], true, out _) ||
             !Guid.TryParseExact(Path.GetFileNameWithoutExtension(segments[1]), "N", out _) ||
-            Path.GetExtension(segments[1]) is not (".jpg" or ".png" or ".mp3" or ".wav" or ".ogg" or ".webm" or ".mp4"))
+            Path.GetExtension(segments[1]) is not (".jpg" or ".png" or ".mp3" or ".wav" or ".ogg" or ".webm" or ".mp4" or ".m4a"))
             throw new ArgumentException("Medya anahtarı geçersiz.", nameof(key));
         var path = Path.GetFullPath(Path.Combine(_root, segments[0], segments[1]));
         var prefix = _root.EndsWith(Path.DirectorySeparatorChar) ? _root : _root + Path.DirectorySeparatorChar;

@@ -1,10 +1,46 @@
+import { useMemo } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Heart, MessageCircle, X } from 'lucide-react-native';
+import { ArrowLeft, Heart, MessageCircle } from 'lucide-react-native';
 import { chatApi, matchApi } from '../api/mindmatch';
-import { Avatar, Button, Card, Loading, Screen, Title } from '../components/ui';
+import { Avatar, Button, Card, Empty, Loading, Screen, Title } from '../components/ui';
 import { colors } from '../theme/tokens';
-export default function RequestsScreen(){const qc=useQueryClient();const matches=useQuery({queryKey:['matches','requests'],queryFn:matchApi.requests});const messages=useQuery({queryKey:['message-requests'],queryFn:chatApi.incoming});const profiles=useQueries({queries:(matches.data||[]).map(x=>({queryKey:['profile',x.requesterId],queryFn:()=>chatApi.profile(x.requesterId)}))});const accept=useMutation({mutationFn:matchApi.accept,onSuccess:()=>{qc.invalidateQueries({queryKey:['matches']});qc.invalidateQueries({queryKey:['conversations']})},onError:e=>Alert.alert('İşlem olmadı',e.message)});const reject=useMutation({mutationFn:matchApi.reject,onSuccess:()=>qc.invalidateQueries({queryKey:['matches']})});const msgAccept=useMutation({mutationFn:chatApi.acceptMessageRequest,onSuccess:()=>{qc.invalidateQueries({queryKey:['message-requests']});qc.invalidateQueries({queryKey:['conversations']})}});const msgReject=useMutation({mutationFn:chatApi.rejectMessageRequest,onSuccess:()=>qc.invalidateQueries({queryKey:['message-requests']})});if(matches.isLoading||messages.isLoading)return <Screen><Loading label="İstekler yükleniyor"/></Screen>;return <Screen scroll style={{paddingHorizontal:22,paddingTop:10}}><Pressable onPress={()=>router.back()} style={s.close}><X size={19} color={colors.ink}/></Pressable><Title eyebrow="YENİ BAĞLANTILAR" title="İstekler" subtitle="Tanışmak isteyenlere göz at."/><Text style={s.head}>Eşleşme istekleri</Text>{matches.data?.length?matches.data.map((m,i)=>{const p=profiles[i]?.data;return <Card key={m.id} style={s.card}><View style={s.person}><Avatar name={p?.displayName||'MindMatch'} size={48}/><View style={{flex:1}}><Text style={s.name}>{p?.displayName||'Yeni bir bağlantı'}</Text><Text style={s.sub}>Seninle tanışmak istiyor</Text></View></View><View style={s.actions}><Button title="Şimdi değil" variant="outline" onPress={()=>reject.mutate(m.id)} style={{flex:1}}/><Button title="Kabul et" icon={<Heart size={15} color={colors.white}/>} onPress={()=>accept.mutate(m.id)} loading={accept.isPending} style={{flex:1}}/></View></Card>}):<Text style={s.empty}>Bekleyen eşleşme isteği yok.</Text>}<Text style={s.head}>Mesaj istekleri</Text>{messages.data?.length?messages.data.map((m:any)=><Card key={m.conversationId} style={s.card}><Text style={s.name}>Kullanıcı {String(m.senderId).slice(0,6)}</Text><Text style={s.sub}>{m.initialMessage||'Sana mesaj isteği gönderdi.'}</Text><View style={s.actions}><Button title="Reddet" variant="outline" onPress={()=>msgReject.mutate(m.conversationId)} style={{flex:1}}/><Button title="Kabul et" icon={<MessageCircle size={15} color={colors.white}/>} onPress={()=>msgAccept.mutate(m.conversationId)} style={{flex:1}}/></View></Card>):<Text style={s.empty}>Bekleyen mesaj isteği yok.</Text>}</Screen>}
-const s=StyleSheet.create({close:{alignSelf:'flex-end',width:39,height:39,borderRadius:14,alignItems:'center',justifyContent:'center',backgroundColor:colors.white,borderColor:colors.line,borderWidth:1},head:{fontSize:15,fontWeight:'900',color:colors.ink,marginTop:8,marginBottom:10},card:{padding:14,marginBottom:10},person:{flexDirection:'row',alignItems:'center',gap:11},name:{fontSize:13,fontWeight:'800',color:colors.ink},sub:{fontSize:10,color:colors.muted,marginTop:4},actions:{flexDirection:'row',gap:8,marginTop:14},empty:{fontSize:11,color:colors.muted,marginBottom:13,paddingLeft:3}});
 
+export default function RequestsScreen() {
+  const qc = useQueryClient();
+  const matches = useQuery({ queryKey: ['matches', 'requests'], queryFn: matchApi.requests, refetchInterval: 10_000 });
+  const messages = useQuery({ queryKey: ['message-requests'], queryFn: chatApi.incoming, refetchInterval: 10_000 });
+  const peopleIds = useMemo(() => [...new Set([...(matches.data ?? []).map(x => x.requesterId), ...(messages.data ?? []).map(x => x.senderId)])], [matches.data, messages.data]);
+  const people = useQueries({ queries: peopleIds.map(userId => ({ queryKey: ['profile', userId], queryFn: () => chatApi.profile(userId) })) });
+  const profiles = new Map(peopleIds.map((id, index) => [id, people[index]?.data]));
+  const refresh = async () => { await Promise.all([qc.invalidateQueries({ queryKey: ['matches'] }), qc.invalidateQueries({ queryKey: ['message-requests'] }), qc.invalidateQueries({ queryKey: ['conversations'] })]); };
+  const acceptMatch = useMutation({ mutationFn: matchApi.accept, onSuccess: async match => { await refresh(); const conversations = await qc.fetchQuery({ queryKey: ['conversations'], queryFn: chatApi.conversations }); const conversation = conversations.find(item => item.otherUserId === match.requesterId); if (conversation) router.push({ pathname: '/conversation/[id]', params: { id: conversation.id, userId: match.requesterId } }); }, onError: error => Alert.alert('İstek kabul edilemedi', error.message) });
+  const rejectMatch = useMutation({ mutationFn: matchApi.reject, onSuccess: refresh, onError: error => Alert.alert('İstek reddedilemedi', error.message) });
+  const acceptMessage = useMutation({ mutationFn: chatApi.acceptMessageRequest, onSuccess: (_result, conversationId) => { const request = messages.data?.find(item => item.conversationId === conversationId); refresh(); router.push({ pathname: '/conversation/[id]', params: { id: conversationId, userId: request?.senderId ?? '' } }); }, onError: error => Alert.alert('İstek kabul edilemedi', error.message) });
+  const rejectMessage = useMutation({ mutationFn: chatApi.rejectMessageRequest, onSuccess: refresh, onError: error => Alert.alert('İstek reddedilemedi', error.message) });
+  if (matches.isLoading || messages.isLoading) return <Screen><Loading label="İstekler yükleniyor" /></Screen>;
+  return <Screen scroll style={styles.screen}>
+    <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.back}><ArrowLeft size={19} color={colors.ink} /></Pressable>
+    <Title eyebrow="YENİ BAĞLANTILAR" title="İstekler" subtitle="Gelen istekleri burada yanıtla." />
+    <Text style={styles.section}>Eşleşme istekleri</Text>
+    {matches.data?.length ? matches.data.map(request => {
+      const person = profiles.get(request.requesterId);
+      return <Card key={request.id} style={styles.card}>
+        <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/user/[id]', params: { id: request.requesterId } })} style={styles.person}><Avatar name={person?.displayName ?? 'MindMatch'} size={48} /><View style={styles.copy}><Text style={styles.name}>{person?.displayName ?? 'Yeni bağlantı'}</Text><Text style={styles.detail}>Seninle tanışmak istiyor</Text></View><Heart size={17} color={colors.coral} /></Pressable>
+        <View style={styles.actions}><Button title="Reddet" variant="outline" onPress={() => rejectMatch.mutate(request.id)} style={styles.flex} /><Button title="Kabul et ve sohbete geç" onPress={() => acceptMatch.mutate(request.id)} loading={acceptMatch.isPending && acceptMatch.variables === request.id} style={styles.flex} /></View>
+      </Card>;
+    }) : <Text style={styles.empty}>Bekleyen eşleşme isteği yok.</Text>}
+    <Text style={styles.section}>Mesaj istekleri</Text>
+    {messages.data?.length ? messages.data.map(request => {
+      const person = profiles.get(request.senderId);
+      return <Card key={request.conversationId} style={styles.card}>
+        <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/user/[id]', params: { id: request.senderId } })} style={styles.person}><Avatar name={person?.displayName ?? 'MindMatch'} size={48} /><View style={styles.copy}><Text style={styles.name}>{person?.displayName ?? 'Yeni bağlantı'}</Text><Text numberOfLines={2} style={styles.detail}>{request.initialMessage || 'Sana mesaj isteği gönderdi.'}</Text></View><MessageCircle size={17} color={colors.violet} /></Pressable>
+        <View style={styles.actions}><Button title="Reddet" variant="outline" onPress={() => rejectMessage.mutate(request.conversationId)} style={styles.flex} /><Button title="Kabul et ve sohbete geç" onPress={() => acceptMessage.mutate(request.conversationId)} loading={acceptMessage.isPending && acceptMessage.variables === request.conversationId} style={styles.flex} /></View>
+      </Card>;
+    }) : <Text style={styles.empty}>Bekleyen mesaj isteği yok.</Text>}
+    {!matches.data?.length && !messages.data?.length ? <Card style={styles.card}><Empty icon="♡" title="İstekler burada görünecek" detail="Yeni eşleşme veya mesaj isteğini anında yanıtlayabilirsin." /></Card> : null}
+  </Screen>;
+}
+
+const styles = StyleSheet.create({ screen: { paddingHorizontal: 20, paddingTop: 10 }, back: { width: 40, height: 40, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderColor: colors.line, borderWidth: 1, backgroundColor: colors.white }, section: { fontSize: 14, fontWeight: '900', color: colors.ink, marginTop: 14, marginBottom: 9 }, card: { padding: 14, marginBottom: 9 }, person: { flexDirection: 'row', alignItems: 'center', gap: 11 }, copy: { flex: 1 }, name: { fontSize: 13, color: colors.ink, fontWeight: '900' }, detail: { fontSize: 10, color: colors.muted, marginTop: 4, lineHeight: 15 }, actions: { flexDirection: 'row', gap: 8, marginTop: 13 }, flex: { flex: 1 }, empty: { fontSize: 11, color: colors.muted, marginBottom: 10, paddingLeft: 3 } });

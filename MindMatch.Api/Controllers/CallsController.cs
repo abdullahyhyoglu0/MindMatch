@@ -21,13 +21,13 @@ public sealed class CallsController : ControllerBase
     { _service = service; _turnCredentials = turnCredentials; }
 
     [HttpGet("turn-credentials")]
-    public IActionResult GetTurnCredentials()
+    public async Task<IActionResult> GetTurnCredentials(CancellationToken cancellationToken)
     {
         Response.Headers.CacheControl = "no-store";
         Response.Headers.Pragma = "no-cache";
         var userId = GetUserId();
         if (userId is null) return Unauthorized();
-        try { return Ok(_turnCredentials.Create(userId.Value)); }
+        try { return Ok(await _turnCredentials.CreateAsync(userId.Value, cancellationToken)); }
         catch (InvalidOperationException ex) { return StatusCode(StatusCodes.Status503ServiceUnavailable, new { message = ex.Message }); }
     }
 

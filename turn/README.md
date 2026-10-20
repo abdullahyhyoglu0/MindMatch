@@ -2,6 +2,14 @@
 
 MindMatch uses WebRTC with short-lived TURN REST credentials. This Coturn service is a separate media relay; the HTTP API creates per-user temporary credentials using the same shared secret.
 
+## Managed Cloudflare TURN (recommended for the current API)
+
+Create a Cloudflare Realtime TURN key and an API token scoped to **Calls Write**. On the API host, configure `Turn__Provider=Cloudflare`, `Turn__CloudflareTurnKeyId`, `Turn__CloudflareApiToken`, and `Turn__CredentialLifetimeSeconds=3600`. Keep the token server-side; the API exchanges it for short-lived TURN credentials and returns only those credentials to the caller. Cloudflare documents TURN usage at $0.05 per real-time GB outbound when not used with Realtime SFU.
+
+The local sample variable names are in the repository `.env.example`. ASP.NET does not automatically load that file; provide these values through the API host's secret/environment configuration. The Cloudflare Quick Tunnel URL for the HTTP API remains separate and does not carry TURN media traffic.
+
+Cloudflare's direct TURN service can be used with the existing peer-to-peer call signaling. Calls still require both clients to reach `turn.cloudflare.com`; the client uses relay-only ICE so media is relayed and peer IP addresses are not exchanged.
+
 ## Requirements
 
 - A Linux VPS with a public IPv4 address and Docker Compose.

@@ -64,7 +64,7 @@ builder.Services.AddSingleton<IMediaStorage, LocalMediaStorage>();
 builder.Services.Configure<PasswordResetEmailSettings>(builder.Configuration.GetSection("PasswordResetEmail"));
 builder.Services.AddSingleton<IPasswordResetEmailSender, SmtpPasswordResetEmailSender>();
 builder.Services.Configure<TurnSettings>(builder.Configuration.GetSection("Turn"));
-builder.Services.AddSingleton<TurnCredentialService>();
+builder.Services.AddHttpClient<TurnCredentialService>();
 
 builder.Services.AddSwaggerGen(options =>
 
