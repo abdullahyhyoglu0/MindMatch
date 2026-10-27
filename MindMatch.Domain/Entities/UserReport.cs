@@ -17,6 +17,7 @@ public sealed class UserReport : BaseEntity
     public string? Resolution { get; private set; }
     public DateTime? ResolvedAtUtc { get; private set; }
     public ICollection<ReportedMessage> Messages { get; private set; } = new List<ReportedMessage>();
+    public ICollection<ReportedStory> Stories { get; private set; } = new List<ReportedStory>();
 
     private UserReport() { }
 
@@ -38,6 +39,12 @@ public sealed class UserReport : BaseEntity
     {
         if (message.ReportId != Id) throw new InvalidOperationException("Mesaj kanıtı farklı bir rapora ait.");
         Messages.Add(message);
+    }
+
+    public void AddStorySnapshot(ReportedStory story)
+    {
+        if (story.ReportId != Id) throw new InvalidOperationException("Hikâye kanıtı farklı bir rapora ait.");
+        Stories.Add(story);
     }
 
     public void Assign(Guid moderatorId)

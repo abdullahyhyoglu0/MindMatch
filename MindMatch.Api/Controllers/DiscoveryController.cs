@@ -25,6 +25,16 @@ public sealed class DiscoveryController : ControllerBase
         catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
     }
 
+    [HttpGet("people")]
+    public async Task<IActionResult> ListPeople([FromQuery] int page = 1, [FromQuery] int pageSize = 30,
+        CancellationToken cancellationToken = default)
+    {
+        var claim = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (!Guid.TryParse(claim, out var userId)) return Unauthorized();
+        try { return Ok(await _discovery.ListPeopleAsync(userId, page, pageSize, cancellationToken)); }
+        catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
+    }
+
     [HttpPost("{targetUserId:guid}/seen")]
     public Task<IActionResult> Seen(Guid targetUserId, CancellationToken cancellationToken) =>
         RecordDecision(targetUserId, false, cancellationToken);

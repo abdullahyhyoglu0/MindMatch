@@ -2,7 +2,19 @@ using MindMatch.Domain.Common;
 
 namespace MindMatch.Domain.Entities;
 
-public enum NotificationType { MatchRequestReceived = 1, MatchAccepted = 2, MessageRequestReceived = 3, MessageRequestAccepted = 4, NewMessage = 5, IncomingCall = 6, ReportResolved = 7 }
+public enum NotificationType
+{
+    MatchRequestReceived = 1,
+    MatchAccepted = 2,
+    MessageRequestReceived = 3,
+    MessageRequestAccepted = 4,
+    NewMessage = 5,
+    IncomingCall = 6,
+    ReportResolved = 7,
+    FollowRequestReceived = 8,
+    FollowAccepted = 9,
+    NewFollower = 10
+}
 
 public sealed class Notification : BaseEntity
 {

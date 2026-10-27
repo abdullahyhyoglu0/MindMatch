@@ -18,4 +18,5 @@ public class MessageResponse
     public DateTime? ExpiresAtUtc { get; set; }
     public bool IsDeletedForEveryone { get; set; }
     public DateTime? DeletedAtUtc { get; set; }
+    public bool IsPendingRequest { get; set; }
 }

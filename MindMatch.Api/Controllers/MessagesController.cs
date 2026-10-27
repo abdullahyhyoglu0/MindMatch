@@ -51,6 +51,10 @@ public class MessagesController : ControllerBase
         {
             return Conflict(new { message = "Medya eşzamanlı olarak başka bir konuşmaya bağlandı. Yeniden deneyin." });
         }
+        catch (DbUpdateException)
+        {
+            return Conflict(new { message = "Mesaj veya medya eşzamanlı bir işlem nedeniyle kaydedilemedi. Konuşmayı yenileyip gerekirse yeniden deneyin." });
+        }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { message = ex.Message });

@@ -14,5 +14,9 @@ public static class ProfilePrivacyMapper
         response.ShowLastSeen = false;
         response.ShowReadReceipts = false;
         response.PremiumPriorityOptIn = false;
+        response.ShowFollowers = false;
+        response.ShowFollowing = false;
+        response.FollowerCount = 0;
+        response.FollowingCount = 0;
     }
 }

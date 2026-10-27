@@ -14,6 +14,8 @@ public sealed class RedisRateLimiter
         ["auth-write"] = new(10, TimeSpan.FromMinutes(5)),
         ["message-write"] = new(30, TimeSpan.FromMinutes(1)),
         ["match-write"] = new(20, TimeSpan.FromHours(1)),
+        ["follow-write"] = new(60, TimeSpan.FromHours(1)),
+        ["story-write"] = new(10, TimeSpan.FromHours(1)),
         ["report-write"] = new(5, TimeSpan.FromHours(1)),
         ["media-upload"] = new(20, TimeSpan.FromHours(1)),
         ["hub-events"] = new(120, TimeSpan.FromMinutes(1)),

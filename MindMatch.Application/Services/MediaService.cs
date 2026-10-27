@@ -20,12 +20,13 @@ public sealed class MediaService : IMediaService
     private readonly IStoryRepository _stories;
     private readonly IUserRepository _users;
     private readonly IReportRepository _reports;
+    private readonly IUserFollowRepository _follows;
 
     public MediaService(IMediaStorage storage, IMediaAssetRepository assets, IUnitOfWork unitOfWork,
         IMessageRepository messages, IConversationRepository conversations, IUserBlockRepository blocks,
         IProfilePhotoRepository profilePhotos, IUserProfileRepository profiles,
-        IStoryRepository stories, IUserRepository users, IReportRepository reports)
-    { _storage = storage; _assets = assets; _unitOfWork = unitOfWork; _messages = messages; _conversations = conversations; _blocks = blocks; _profilePhotos = profilePhotos; _profiles = profiles; _stories = stories; _users = users; _reports = reports; }
+        IStoryRepository stories, IUserRepository users, IReportRepository reports, IUserFollowRepository follows)
+    { _storage = storage; _assets = assets; _unitOfWork = unitOfWork; _messages = messages; _conversations = conversations; _blocks = blocks; _profilePhotos = profilePhotos; _profiles = profiles; _stories = stories; _users = users; _reports = reports; _follows = follows; }
 
     public async Task<MediaAssetResponse> UploadAsync(Guid ownerId, MediaCategory category, Stream content,
         string suppliedContentType, CancellationToken cancellationToken = default)
@@ -81,7 +82,8 @@ public sealed class MediaService : IMediaService
             var profile = await _profiles.GetByUserIdAsync(photo.UserId, cancellationToken);
             var owner = await _users.GetByIdAsync(photo.UserId, cancellationToken);
             if (owner is null || !owner.IsActive || profile is null) return null;
-            if (viewerId != photo.UserId && (!profile.IsProfileVisible ||
+            if (viewerId != photo.UserId && (!(profile.IsProfileVisible ||
+                await _follows.IsAcceptedAsync(viewerId, photo.UserId, cancellationToken)) ||
                 await _blocks.IsBlockedEitherWayAsync(viewerId, photo.UserId, cancellationToken))) return null;
         }
         else if (asset.Category is MediaCategory.StoryImage or MediaCategory.StoryVideo)
@@ -93,7 +95,8 @@ public sealed class MediaService : IMediaService
             if (viewerId != story.UserId)
             {
                 var profile = await _profiles.GetByUserIdAsync(story.UserId, cancellationToken);
-                if (profile is null || !profile.IsProfileVisible ||
+                if (profile is null || !(profile.IsProfileVisible ||
+                    await _follows.IsAcceptedAsync(viewerId, story.UserId, cancellationToken)) ||
                     await _blocks.IsBlockedEitherWayAsync(viewerId, story.UserId, cancellationToken)) return null;
             }
         }
@@ -141,12 +144,15 @@ public sealed class MediaService : IMediaService
         var report = await _reports.GetByIdAsync(reportId, cancellationToken);
         if (report is null) return null;
         var now = DateTime.UtcNow;
-        if (!report.Messages.Any(x => x.IsMediaEvidenceAvailableAt(mediaAssetId, now)))
+        var messageEvidence = report.Messages.Any(x => x.IsMediaEvidenceAvailableAt(mediaAssetId, now));
+        var storyEvidence = report.Stories.Any(x => x.IsMediaEvidenceAvailableAt(mediaAssetId, now));
+        if (!messageEvidence && !storyEvidence)
             return null;
 
         var asset = await _assets.GetByIdAsync(mediaAssetId, cancellationToken);
         if (asset is null || asset.OwnerId != report.ReportedUserId ||
-            asset.Category is not (MediaCategory.MessageImage or MediaCategory.MessageVoice or MediaCategory.MessageVideo))
+            asset.Category is not (MediaCategory.MessageImage or MediaCategory.MessageVoice or MediaCategory.MessageVideo or
+                MediaCategory.StoryImage or MediaCategory.StoryVideo))
             return null;
 
         var stream = await _storage.OpenReadAsync(asset.StorageKey, cancellationToken);
@@ -181,7 +187,8 @@ public sealed class MediaService : IMediaService
             // 1. JPEG: 0xFF, 0xD8
             if (bytes.Length >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8)
             {
-                TryGetJpegDimensions(bytes, out var jpegWidth, out var jpegHeight);
+                if (!TryGetJpegDimensions(bytes, out var jpegWidth, out var jpegHeight))
+                    throw new ArgumentException("JPEG görseli geçersiz.");
                 if (jpegWidth > 8192 || jpegHeight > 8192 || (long)jpegWidth * jpegHeight > 40_000_000)
                     throw new ArgumentException("JPEG görseli boyut sınırını aşıyor.");
                 return ("image/jpeg", "jpg", jpegWidth > 0 ? jpegWidth : null, jpegHeight > 0 ? jpegHeight : null);
@@ -191,7 +198,8 @@ public sealed class MediaService : IMediaService
             ReadOnlySpan<byte> pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
             if (bytes.Length >= 8 && bytes.AsSpan(0, 8).SequenceEqual(pngSignature))
             {
-                TryGetPngDimensions(bytes, out var width, out var height);
+                if (!TryGetPngDimensions(bytes, out var width, out var height))
+                    throw new ArgumentException("PNG görseli geçersiz.");
                 if (width > 8192 || height > 8192 || (long)width * height > 40_000_000)
                     throw new ArgumentException("Görsel çözünürlüğü izin verilen sınırların dışında.");
                 return ("image/png", "png", width > 0 ? width : null, height > 0 ? height : null);
@@ -261,6 +269,8 @@ public sealed class MediaService : IMediaService
 
         width = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(16, 4));
         height = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(20, 4));
+
+        if (bytes.Length < 12 || bytes.AsSpan(bytes.Length - 12).IndexOf("IEND"u8) < 0) return false;
 
         return width > 0 && height > 0;
     }
@@ -478,6 +488,7 @@ public sealed class MediaService : IMediaService
 
         var position = 2;
         var hasFrame = false;
+        var hasScan = false;
 
         while (position < bytes.Length - 1)
         {
@@ -497,7 +508,6 @@ public sealed class MediaService : IMediaService
 
             if (marker == 0xD9)
             {
-                if (hasFrame) return true;
                 break;
             }
 
@@ -519,12 +529,13 @@ public sealed class MediaService : IMediaService
             }
             else if (marker == 0xDA && hasFrame)
             {
+                hasScan = true;
                 return true;
             }
 
             position += segmentLength;
         }
 
-        return hasFrame && width > 0 && height > 0;
+        return hasFrame && hasScan && width > 0 && height > 0;
     }
 }

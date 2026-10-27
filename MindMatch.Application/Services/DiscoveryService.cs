@@ -12,10 +12,14 @@ public sealed class DiscoveryService : IDiscoveryService
     private readonly IPremiumService _premium;
     private readonly IUserMusicPreferenceRepository _music;
     private readonly IMoodCheckInRepository _moods;
+    private readonly IUserFollowRepository _follows;
+    private readonly IStoryRepository _stories;
+    private readonly IUserPresenceReader _presence;
 
     public DiscoveryService(IUserProfileRepository profiles, IUserInterestRepository interests,
         IUserBlockRepository blocks, IPremiumService premium, IUserMusicPreferenceRepository music,
-        IMoodCheckInRepository moods)
+        IMoodCheckInRepository moods, IUserFollowRepository follows, IStoryRepository stories,
+        IUserPresenceReader presence)
     {
         _profiles = profiles;
         _interests = interests;
@@ -23,6 +27,9 @@ public sealed class DiscoveryService : IDiscoveryService
         _premium = premium;
         _music = music;
         _moods = moods;
+        _follows = follows;
+        _stories = stories;
+        _presence = presence;
     }
 
     public async Task<DiscoveryPageResponse> DiscoverAsync(Guid userId, int page, int pageSize,
@@ -116,6 +123,64 @@ public sealed class DiscoveryService : IDiscoveryService
         var target = await _profiles.GetByUserIdAsync(targetUserId, cancellationToken);
         if (target is null || !target.IsProfileVisible) throw new KeyNotFoundException("Profil bulunamadı.");
         await _profiles.RecordDiscoveryDecisionAsync(userId, targetUserId, rejected, cancellationToken);
+    }
+
+    public async Task<DiscoverPeoplePageResponse> ListPeopleAsync(Guid userId, int page, int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateUserId(userId);
+        if (page < 1 || pageSize is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        var selfSlot = page == 1 ? 1 : 0;
+        var candidateCapacity = pageSize - selfSlot;
+        var candidateOffset = page == 1 ? 0 : (pageSize - 1) + (page - 2) * pageSize;
+        var blocked = await _blocks.GetRelatedUserIdsAsync(userId, cancellationToken);
+        var rows = await _profiles.ListVisiblePeopleAsync(blocked.Append(userId).Distinct().ToArray(),
+            candidateOffset, Math.Max(1, candidateCapacity + 1), cancellationToken);
+        var hasMore = rows.Count > candidateCapacity;
+        if (hasMore && candidateCapacity > 0) rows.RemoveAt(rows.Count - 1);
+        if (candidateCapacity == 0) rows.Clear();
+        var me = await _profiles.GetByUserIdAsync(userId, cancellationToken)
+            ?? throw new InvalidOperationException("Kullanıcı profili bulunamadı.");
+        var people = new List<UserProfile>();
+        if (page == 1) people.Add(me);
+        people.AddRange(rows);
+        var ids = people.Select(x => x.UserId).ToArray();
+        var storyRows = await _stories.GetFeedAsync(userId, blocked, 500, cancellationToken);
+        storyRows.AddRange(await _stories.GetByUserIdAsync(userId, cancellationToken));
+        storyRows = storyRows.Where(x => ids.Contains(x.UserId)).ToList();
+        var storyOwners = storyRows.Select(x => x.UserId).ToHashSet();
+        var seenStories = (await _stories.GetViewedStoryIdsAsync(userId, storyRows.Select(x => x.Id).ToArray(), cancellationToken)).ToHashSet();
+        var unseenOwners = storyRows.Where(x => !seenStories.Contains(x.Id)).Select(x => x.UserId).ToHashSet();
+        var statuses = await _presence.GetStatusesAsync(ids, cancellationToken);
+        var items = new List<DiscoverPersonResponse>(people.Count);
+        foreach (var profile in people)
+        {
+            var isSelf = profile.UserId == userId;
+            var relation = isSelf ? FollowRelation.None : await GetRelationAsync(userId, profile.UserId, cancellationToken);
+            var status = statuses.TryGetValue(profile.UserId, out var presence)
+                ? presence : (IsOnline: false, LastSeenAtUtc: (DateTime?)null);
+            var visibility = profile.ShowOnlineStatus && statuses.ContainsKey(profile.UserId);
+            items.Add(new DiscoverPersonResponse
+            {
+                UserId = profile.UserId, DisplayName = profile.DisplayName, Nickname = profile.Nickname,
+                IsSelf = isSelf, HasActiveStory = storyOwners.Contains(profile.UserId),
+                HasUnseenStory = unseenOwners.Contains(profile.UserId),
+                IsOnline = visibility ? status.IsOnline : null,
+                LastSeenAtUtc = profile.ShowLastSeen && visibility ? status.LastSeenAtUtc : null,
+                MessagingMode = isSelf ? DiscoverMessagingMode.Unavailable :
+                    SocialAccess.ResolveMessaging(profile, true, false),
+                FollowRelation = relation
+            });
+        }
+        items = items.OrderByDescending(x => x.IsSelf).ThenByDescending(x => x.HasActiveStory)
+            .ThenByDescending(x => x.IsOnline == true).ToList();
+        return new DiscoverPeoplePageResponse { Items = items, Page = page, PageSize = pageSize, HasMore = hasMore };
+    }
+
+    private async Task<FollowRelation> GetRelationAsync(Guid viewerId, Guid targetId, CancellationToken cancellationToken)
+    {
+        var pair = await _follows.GetPairAsync(viewerId, targetId, cancellationToken);
+        return UserFollow.RelationOf(pair.Outgoing, pair.Incoming);
     }
 
     private static UserProfileResponse Map(UserProfile profile) => new()

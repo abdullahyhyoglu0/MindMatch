@@ -15,4 +15,10 @@ public interface IStoryRepository
         CancellationToken cancellationToken = default);
     Task<List<StoryView>> GetViewsAsync(Guid storyId, CancellationToken cancellationToken = default);
     Task<List<Story>> GetExpiredBatchAsync(DateTime nowUtc, int take, CancellationToken cancellationToken = default);
+    Task<List<Guid>> GetActiveStoryOwnerIdsAsync(IReadOnlyCollection<Guid> userIds,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new List<Guid>());
+    Task<List<Story>> GetLatestActiveByUserIdsAsync(IReadOnlyCollection<Guid> userIds,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new List<Story>());
 }

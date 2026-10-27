@@ -860,6 +860,57 @@ namespace MindMatch.Infrastructure.Migrations
                     b.ToTable("reported_messages", (string)null);
                 });
 
+            modelBuilder.Entity("MindMatch.Domain.Entities.ReportedStory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CaptionSnapshot")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("EvidenceExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("MediaAssetIdSnapshot")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("MediaReferenceSnapshot")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("MediaType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("ReportId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("StoryCreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("StoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EvidenceExpiresAtUtc");
+
+                    b.HasIndex("MediaAssetIdSnapshot");
+
+                    b.HasIndex("ReportId", "StoryCreatedAtUtc");
+
+                    b.ToTable("reported_stories", (string)null);
+                });
+
             modelBuilder.Entity("MindMatch.Domain.Entities.Story", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1029,6 +1080,48 @@ namespace MindMatch.Infrastructure.Migrations
                     b.ToTable("user_blocks", (string)null);
                 });
 
+            modelBuilder.Entity("MindMatch.Domain.Entities.UserFollow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FollowedId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("FollowerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("RespondedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FollowerId", "FollowedId")
+                        .IsUnique();
+
+                    b.HasIndex("FollowedId", "Status", "CreatedAtUtc");
+
+                    b.HasIndex("FollowerId", "Status", "CreatedAtUtc");
+
+                    b.ToTable("user_follows", (string)null);
+                });
+
             modelBuilder.Entity("MindMatch.Domain.Entities.UserInterest", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1150,6 +1243,16 @@ namespace MindMatch.Infrastructure.Migrations
 
                     b.Property<bool>("PremiumPriorityOptIn")
                         .HasColumnType("boolean");
+
+                    b.Property<bool>("ShowFollowers")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("ShowFollowing")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
 
                     b.Property<bool>("ShowLastSeen")
                         .HasColumnType("boolean");
@@ -1484,6 +1587,15 @@ namespace MindMatch.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("MindMatch.Domain.Entities.ReportedStory", b =>
+                {
+                    b.HasOne("MindMatch.Domain.Entities.UserReport", null)
+                        .WithMany("Stories")
+                        .HasForeignKey("ReportId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("MindMatch.Domain.Entities.Story", b =>
                 {
                     b.HasOne("MindMatch.Domain.Entities.MediaAsset", null)
@@ -1527,6 +1639,21 @@ namespace MindMatch.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("BlockerId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MindMatch.Domain.Entities.UserFollow", b =>
+                {
+                    b.HasOne("MindMatch.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("FollowedId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("MindMatch.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("FollowerId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 
@@ -1605,6 +1732,8 @@ namespace MindMatch.Infrastructure.Migrations
             modelBuilder.Entity("MindMatch.Domain.Entities.UserReport", b =>
                 {
                     b.Navigation("Messages");
+
+                    b.Navigation("Stories");
                 });
 #pragma warning restore 612, 618
         }

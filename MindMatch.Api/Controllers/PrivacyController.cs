@@ -21,7 +21,7 @@ public sealed class PrivacyController : ControllerBase
         var profile = await _profiles.GetMyProfileAsync(userId, cancellationToken);
         return Ok(new PrivacySettingsResponse(profile.ShowReadReceipts, profile.ShowLastSeen,
             profile.ShowOnlineStatus, profile.AllowMessageRequests, profile.AllowCallsFromNonMatches,
-            profile.ShowPremiumBadge, profile.PremiumPriorityOptIn));
+            profile.ShowPremiumBadge, profile.PremiumPriorityOptIn, profile.ShowFollowers, profile.ShowFollowing));
     }
 
     [HttpPut]

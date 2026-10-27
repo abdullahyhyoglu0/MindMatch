@@ -12,6 +12,8 @@ public class UserProfileService : IUserProfileService
     private readonly IUserInterestRepository _userInterestRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IUserBlockRepository _userBlockRepository;
+    private readonly IUserFollowRepository _follows;
+    private readonly IConversationRepository _conversations;
     private readonly IPremiumService _premiumService;
 
     public UserProfileService(
@@ -19,6 +21,8 @@ public class UserProfileService : IUserProfileService
         IUserRepository users,
         IUserInterestRepository userInterestRepository,
         IUserBlockRepository userBlockRepository,
+        IUserFollowRepository follows,
+        IConversationRepository conversations,
         IPremiumService premiumService,
         IUnitOfWork unitOfWork)
     {
@@ -26,6 +30,8 @@ public class UserProfileService : IUserProfileService
         _users = users;
         _userInterestRepository = userInterestRepository;
         _userBlockRepository = userBlockRepository;
+        _follows = follows;
+        _conversations = conversations;
         _premiumService = premiumService;
         _unitOfWork = unitOfWork;
     }
@@ -118,13 +124,30 @@ public class UserProfileService : IUserProfileService
             throw new KeyNotFoundException("Profil bulunamadı.");
 
         var profile = await _profileRepository.GetByUserIdAsync(targetUserId, cancellationToken);
-        if (profile is null || !profile.IsProfileVisible)
+        if (profile is null)
             throw new KeyNotFoundException("Profil bulunamadı.");
 
+        var canView = await SocialAccess.CanViewProfileAsync(viewerId, profile, _follows, cancellationToken);
         var response = MapToResponse(profile);
+        await EnrichSocialAsync(response, viewerId, profile, canView, cancellationToken);
         response.Age = CalculateAge(profile.BirthDate);
-        // Public profile DTO shares the private profile shape; never reveal account-level privacy controls.
         ProfilePrivacyMapper.ApplyPublicView(response);
+        response.CanViewProfile = canView;
+        response.IsProfileVisible = profile.IsProfileVisible;
+        if (!canView)
+        {
+            response.Bio = null;
+            response.City = null;
+            response.Gender = Gender.PreferNotToSay;
+            response.GenderPreference = GenderPreference.Everyone;
+            response.MinimumMatchAge = null;
+            response.MaximumMatchAge = null;
+            response.Age = null;
+            response.InterestIds = [];
+            response.ShowPremiumBadge = false;
+            return response;
+        }
+
         response.ShowPremiumBadge = profile.ShowPremiumBadge && await _premiumService.IsPremiumAsync(targetUserId, cancellationToken);
         response.InterestIds = await _userInterestRepository.GetInterestIdsByUserIdAsync(targetUserId, cancellationToken);
         return response;
@@ -138,7 +161,7 @@ public class UserProfileService : IUserProfileService
         var profile = await GetRequiredProfileAsync(userId, cancellationToken);
         profile.UpdatePreferences(request.AllowMessageRequests, request.AllowCallsFromNonMatches,
             request.ShowOnlineStatus, request.ShowLastSeen, request.ShowReadReceipts, request.ShowPremiumBadge,
-            request.PremiumPriorityOptIn);
+            request.PremiumPriorityOptIn, request.ShowFollowers, request.ShowFollowing);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
@@ -190,6 +213,22 @@ public class UserProfileService : IUserProfileService
             ShowPremiumBadge = profile.ShowPremiumBadge,
             PremiumPriorityOptIn = profile.PremiumPriorityOptIn
         };
+    }
+
+    private async Task EnrichSocialAsync(UserProfileResponse response, Guid viewerId, UserProfile profile,
+        bool canView, CancellationToken cancellationToken)
+    {
+        if (viewerId == profile.UserId) response.FollowRelation = FollowRelation.None;
+        else
+        {
+            var pair = await _follows.GetPairAsync(viewerId, profile.UserId, cancellationToken);
+            response.FollowRelation = UserFollow.RelationOf(pair.Outgoing, pair.Incoming);
+        }
+        response.FollowerCount = await _follows.CountAcceptedFollowersAsync(profile.UserId, cancellationToken);
+        response.FollowingCount = await _follows.CountAcceptedFollowingAsync(profile.UserId, cancellationToken);
+        response.MessagingMode = SocialAccess.ResolveMessaging(profile, canView, false);
+        response.ShowFollowers = profile.ShowFollowers;
+        response.ShowFollowing = profile.ShowFollowing;
     }
 
     private static int? CalculateAge(DateOnly? birthDate)

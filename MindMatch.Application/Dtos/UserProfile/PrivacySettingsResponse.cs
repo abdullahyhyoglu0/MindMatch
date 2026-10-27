@@ -7,4 +7,6 @@ public sealed record PrivacySettingsResponse(
     bool AllowMessageRequests,
     bool AllowCallsFromNonMatches,
     bool ShowPremiumBadge,
-    bool PremiumPriorityOptIn);
+    bool PremiumPriorityOptIn,
+    bool ShowFollowers,
+    bool ShowFollowing);

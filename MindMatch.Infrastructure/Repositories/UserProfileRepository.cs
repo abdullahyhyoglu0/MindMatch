@@ -140,6 +140,17 @@ public class UserProfileRepository : IUserProfileRepository
             .Where(x => x.ViewerId == viewerId && (x.RejectedAtUtc != null || x.SeenAtUtc >= seenSinceUtc))
             .Select(x => x.TargetUserId).ToListAsync(cancellationToken);
 
+    public Task<List<UserProfile>> GetByUserIdsAsync(IReadOnlyCollection<Guid> userIds,
+        CancellationToken cancellationToken = default) => userIds.Count == 0
+        ? Task.FromResult(new List<UserProfile>())
+        : _context.UserProfiles.Where(x => userIds.Contains(x.UserId)).ToListAsync(cancellationToken);
+
+    public Task<List<UserProfile>> ListVisiblePeopleAsync(IReadOnlyCollection<Guid> excludedUserIds,
+        int skip, int take, CancellationToken cancellationToken = default) =>
+        _context.UserProfiles.Where(p => p.IsProfileVisible && !excludedUserIds.Contains(p.UserId) &&
+                _context.Users.Any(u => u.Id == p.UserId && u.IsActive))
+            .OrderBy(p => p.UserId).Skip(skip).Take(take).ToListAsync(cancellationToken);
+
     public async Task RecordDiscoveryDecisionAsync(Guid viewerId, Guid targetUserId, bool rejected,
         CancellationToken cancellationToken = default)
     {

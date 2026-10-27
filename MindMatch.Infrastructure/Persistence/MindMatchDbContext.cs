@@ -25,9 +25,11 @@ public class MindMatchDbContext : DbContext, IUnitOfWork
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<MessageDeletion> MessageDeletions => Set<MessageDeletion>();
     public DbSet<UserBlock> UserBlocks => Set<UserBlock>();
+    public DbSet<UserFollow> UserFollows => Set<UserFollow>();
     public DbSet<UserReport> UserReports => Set<UserReport>();
     public DbSet<MessageRequest> MessageRequests => Set<MessageRequest>();
     public DbSet<ReportedMessage> ReportedMessages => Set<ReportedMessage>();
+    public DbSet<ReportedStory> ReportedStories => Set<ReportedStory>();
     public DbSet<ModerationAudit> ModerationAudits => Set<ModerationAudit>();
     public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();
     public DbSet<ProfilePhoto> ProfilePhotos => Set<ProfilePhoto>();
@@ -100,6 +102,9 @@ public class MindMatchDbContext : DbContext, IUnitOfWork
 
             entity.Property(x => x.City)
                 .HasMaxLength(100);
+
+            entity.Property(x => x.ShowFollowers).HasDefaultValue(true);
+            entity.Property(x => x.ShowFollowing).HasDefaultValue(true);
         });
 
         modelBuilder.Entity<DiscoveryDecision>(entity =>
@@ -452,6 +457,19 @@ public class MindMatchDbContext : DbContext, IUnitOfWork
             entity.HasIndex(x => new { x.BlockedUserId, x.BlockerId });
         });
 
+        modelBuilder.Entity<UserFollow>(entity =>
+        {
+            entity.ToTable("user_follows");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.HasOne<User>().WithMany().HasForeignKey(x => x.FollowerId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne<User>().WithMany().HasForeignKey(x => x.FollowedId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.FollowerId, x.FollowedId }).IsUnique();
+            entity.HasIndex(x => new { x.FollowedId, x.Status, x.CreatedAtUtc });
+            entity.HasIndex(x => new { x.FollowerId, x.Status, x.CreatedAtUtc });
+        });
+
         modelBuilder.Entity<ProfilePhoto>(entity =>
         {
             entity.ToTable("profile_photos");
@@ -507,6 +525,7 @@ public class MindMatchDbContext : DbContext, IUnitOfWork
             entity.HasIndex(x => new { x.ReporterId, x.CreatedAtUtc });
             entity.HasIndex(x => new { x.ReportedUserId, x.CreatedAtUtc });
             entity.HasMany(x => x.Messages).WithOne().HasForeignKey(x => x.ReportId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(x => x.Stories).WithOne().HasForeignKey(x => x.ReportId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ReportedMessage>(entity =>
@@ -521,6 +540,19 @@ public class MindMatchDbContext : DbContext, IUnitOfWork
             entity.HasIndex(x => x.MediaAssetIdSnapshot);
             entity.Property(x => x.MessageType).HasConversion<string>().HasMaxLength(20).IsRequired();
             entity.HasIndex(x => new { x.ReportId, x.MessageCreatedAtUtc });
+        });
+
+        modelBuilder.Entity<ReportedStory>(entity =>
+        {
+            entity.ToTable("reported_stories");
+            entity.HasKey(x => x.Id);
+            entity.HasOne<UserReport>().WithMany(x => x.Stories).HasForeignKey(x => x.ReportId).OnDelete(DeleteBehavior.Cascade);
+            entity.Property(x => x.MediaReferenceSnapshot).HasMaxLength(2048);
+            entity.Property(x => x.CaptionSnapshot).HasMaxLength(500);
+            entity.Property(x => x.MediaType).HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.HasIndex(x => x.EvidenceExpiresAtUtc);
+            entity.HasIndex(x => x.MediaAssetIdSnapshot);
+            entity.HasIndex(x => new { x.ReportId, x.StoryCreatedAtUtc });
         });
 
         modelBuilder.Entity<ModerationAudit>(entity =>
