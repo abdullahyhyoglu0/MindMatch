@@ -1,0 +1,515 @@
+MINDMATCH MOBİL UYGULAMA ENTEGRASYON GEREKSİNİMLERİ
+==================================================
+
+Bu doküman, mobil uygulamanın mevcut backend'e nasıl bağlanacağını açıklar.
+Mobil istemci bu sözleşmeleri kullanmalı; sunucu kurallarını istemcide yeniden
+uygulamamalıdır.
+
+GENEL
+-----
+
+- Kimlik doğrulamalı API isteklerine `Authorization: Bearer <accessToken>` ekle.
+- Access ve refresh token'larını güvenli mobil depolamada tut.
+- 401'de token'ı bir kez yenile ve isteği bir kez tekrarla; yenileme başarısızsa
+  oturumu kapat. Yenileme döngüsü oluşturma.
+- Saatler UTC'dir. 401 oturum hatası, 403 yetki reddi, 404 bulunmayan/gizli içerik,
+  409 çakışma/tekrar, 429 hız sınırıdır. 429 yanıtında `Retry-After` uygula.
+- Enum'lar mevcut API'de JSON sayısı olarak döner. Aşağıdaki enum değerlerini
+  kullan; rastgele metin karşılığı gönderme.
+- Medya ID'si public URL değildir. İçeriği token ile `GET /api/media/{id}`
+  üzerinden yükle.
+
+1. GİRİŞ VE OTURUM
+------------------
+
+  POST /api/auth/register
+  POST /api/auth/login
+  POST /api/auth/refresh
+  POST /api/auth/logout
+  POST /api/auth/logout-all
+  GET  /api/auth/me
+
+2. ANA SAYFA, KİŞİLER, HİKÂYELER, RUH HÂLİ
+------------------------------------------
+
+Kişi/hikâye/çevrimiçi şeridi:
+
+  GET /api/discovery/people?page=1&pageSize=30
+
+Yanıt: `{ items, page, pageSize, hasMore }`. Kişi öğelerinde `userId`,
+`displayName`, `nickname`, `isSelf`, `hasActiveStory`, `hasUnseenStory`,
+`isOnline`, `lastSeenAtUtc`, `messagingMode`, `followRelation` bulunur. İlk öğe
+kullanıcının kendisidir; sonra hikâyesi olanlar ve çevrimiçi kişiler sıralanır.
+`isOnline`/`lastSeenAtUtc` null ise gizlilik ayarı bu bilgiyi saklıyordur.
+
+Hikâye tepsisi:
+
+  GET  /api/stories/tray
+  GET  /api/stories/{storyId}
+  POST /api/stories/{storyId}/view
+
+Tepside kullanıcı, takip edilenler ve kendi hikâyeleri yer alır. Hikâyesi
+olmayan kişinin `stories` listesi boştur. Hikâye medyasını `/api/media/{id}`
+üzerinden al.
+
+Ruh hâli ve uyum keşfi, kişi şeridinden ayrı API akışıdır:
+
+  POST /api/moodcheckins
+       { "mood": 1, "energy": 1, "desiredConversation": 1 }
+  GET  /api/moodcheckins/me/latest
+  GET  /api/discovery?page=1&pageSize=20&city=<optional>&premiumOnly=false
+  POST /api/discovery/{userId}/seen
+  POST /api/discovery/{userId}/reject
+
+MoodType: Happy=1, Sad=2, Stressed=3, Lonely=4, Calm=5, Anxious=6,
+Excited=7, Tired=8, Neutral=9. EnergyLevel: Low=1, Medium=2, High=3.
+DesiredConversation: Venting=1, Advice=2, Fun=3, DeepTalk=4, Casual=5,
+NewFriendship=6, Listening=7.
+
+3. PROFİL, GİZLİLİK, TAKİP
+-------------------------
+
+  GET   /api/profiles/me
+  GET   /api/profiles/{userId}
+  PUT   /api/profiles/me
+  PATCH /api/profiles/me/visibility?isVisible=true|false
+  GET   /api/profiles/me/photos
+  GET   /api/profiles/{userId}/photos
+  GET   /api/privacy
+  PUT   /api/privacy
+
+Gizli profilde kabul edilmemiş takipçiye `canViewProfile=false` döner ve özel
+profil alanları saklanır. Böyle durumda takip isteği eylemi göster; 404, hesabın
+kesinlikle mevcut olmadığı anlamına gelmeyebilir.
+
+  POST   /api/follows/{userId}                         takip/istek gönder
+  DELETE /api/follows/{userId}                         takibi bırak/isteği iptal et
+  DELETE /api/follows/followers/{followerId}           takipçiyi çıkar
+  GET    /api/follows/requests/incoming
+  POST   /api/follows/requests/{followerId}/accept
+  POST   /api/follows/requests/{followerId}/reject
+  GET    /api/follows/{userId}/followers?page=1&pageSize=30
+  GET    /api/follows/{userId}/following?page=1&pageSize=30
+
+Takip yanıtı `status` ve `relation` içerir. FollowStatus: Pending=1, Accepted=2.
+FollowRelation: None=0, Following=1, FollowedBy=2, Mutual=3,
+OutgoingRequest=4, IncomingRequest=5. Gizli liste yanıtında `isHidden=true`,
+`items=[]`, `count=0` olur. Takip/istek işlemlerinden sonra ilişkiyi ve sayıları
+yenile. DiscoverPerson `messagingMode`: Unavailable=0, Direct=1, Request=2.
+Takip ile eşleşme isteğini aynı eylem gibi ele alma.
+
+Profil fotoğrafı iki aşamada yüklenir:
+
+  POST /api/media?category=1   multipart alanı: file
+  POST /api/profiles/me/photos { "mediaAssetId": "<guid>" }
+  PUT    /api/profiles/me/photos/{photoId}/primary
+  DELETE /api/profiles/me/photos/{photoId}
+
+4. KALP / EŞLEŞME İSTEĞİ
+------------------------
+
+Kalp eşleşme isteğidir, takip değildir:
+
+  POST /api/matches/{receiverId}
+  GET  /api/matches
+  GET  /api/matches/requests
+  POST /api/matches/{matchId}/accept
+  POST /api/matches/{matchId}/reject
+  POST /api/matches/{matchId}/end
+
+Yanıttaki eşleşme durumunu kullan. Kabul/red sonrasında eşleşme ve sohbet
+verilerini yenile.
+
+5. SOHBET, MESAJ İSTEĞİ, BİLDİRİM
+---------------------------------
+
+Profilden sohbet başlat:
+
+  POST /api/message-requests
+  { "recipientId": "<user-guid>", "content": "İlk mesaj" }
+
+  GET  /api/message-requests/incoming
+  POST /api/message-requests/{conversationId}/accept
+  POST /api/message-requests/{conversationId}/reject
+  GET  /api/conversations
+  GET  /api/conversations/{conversationId}/messages?pageSize=50
+
+Backend, profil gizliliği ve mesaj tercihlerine göre ilk mesajı doğrudan
+sohbete kaydeder veya bekleyen mesaj isteğine dönüştürür. Yanıtta
+`conversationId`, `isPendingRequest` ve ilk mesajın `expiresAtUtc` değerini kullan.
+
+Mesaj isteği oluşturma yalnızca ilk metin mesajını destekler:
+
+  POST /api/message-requests
+  { "recipientId": "<user-guid>", "content": "İlk mesaj" }
+
+İstek alıcısı kabul etmeden bu konuşmada yeni mesaj gönderilemez. Bekleyen
+istekleri normal sohbet listesine karıştırma. Kabulden sonra aynı conversation
+içinde metin, fotoğraf, ses ve destekleniyorsa video gönderilebilir.
+
+Normal mesaj:
+
+  POST /api/messages
+  { "conversationId": "<guid>", "type": 1, "content": "Merhaba" }
+
+Başarılı gönderim HTTP 201 döndürür. Yanıttaki `id`, `createdAtUtc`, `status`,
+`expiresAtUtc` ve `conversationId` değerlerini yerel gönderiyi sunucu kaydıyla
+eşleştirmek için kullan. Metin boş/yalnızca boşluk olamaz ve en fazla 5000
+karakterdir. Backend metni otomatik çevirmiyor veya HTML olarak sunmuyor.
+
+Fotoğraf ve ses iki aşamada gönderilir; önce medyayı yükle, sonra dönen ID ile
+mesaj oluştur:
+
+  POST /api/media?category=2   multipart/form-data alan adı: file
+  POST /api/messages
+  { "conversationId": "<guid>", "type": 2, "mediaAssetId": "<asset-guid>" }
+
+  POST /api/media?category=3   multipart/form-data alan adı: file
+  POST /api/messages
+  { "conversationId": "<guid>", "type": 3, "mediaAssetId": "<asset-guid>" }
+
+MessageType: Text=1, Image=2, Voice=3, Video=4, File=5. File gönderimi
+desteklenmiyor. MediaCategory: MessageImage=2, MessageVoice=3,
+MessageVideo=6. Tür ve kategori eşleşmelidir. `mediaUrl` yollama; harici URL
+reddedilir. Bir medya varlığı yalnızca bir mesaja ve tek bir sohbete bağlanabilir.
+Mesaj isteği ilk mesajı sadece metin olarak kabul ettiğinden, istek kabul
+edilmeden fotoğraf/ses gönderme.
+
+Yükleme sınırları ve kabul edilen içerikler:
+
+- Fotoğraf: en fazla 25 MiB; JPEG, PNG veya WebP. İçerik imzası doğrulanır;
+  dosya uzantısı veya istemcinin MIME beyanı tek başına yeterli değildir.
+- Ses: en fazla 15 MiB; `audio/wav`, `audio/ogg`, `audio/mpeg` (MP3),
+  `audio/webm` veya AAC ses izi içeren `audio/mp4` (M4A). Kaydedici mümkünse
+  M4A/AAC (`audio/mp4`) veya Ogg/WebM üretmeli ve gerçek MIME türünü yollamalı.
+- Video: en fazla 50 MiB; doğrulanabilir MP4. File türü desteklenmiyor.
+- Fotoğrafı yüklemeden önce cihazda makul çözünürlüğe küçült ve sıkıştır;
+  backend otomatik thumbnail/format dönüştürme yapmıyor. Fotoğraf çözünürlük
+  üst sınırı 8192x8192 ve 40 megapiksel.
+
+Gönderim performansı ve hata kurtarma:
+
+1. Metin için bubble'ı iyimser olarak hemen göster; tek `POST /api/messages`
+   isteği gönder. Fotoğraf/seste önce yerel bekleyen bubble ve yükleme ilerlemesi
+   göster, sonra yüklemeyi, en son mesaj POST'unu tamamla.
+2. Metin ve mesaj POST'larında `message-write` sınırı 30 istek/dakikadır;
+   medya yüklemede `media-upload` sınırı 20 yükleme/saat/kullanıcıdır. 429
+   yanıtında `Retry-After` saniyesine uy. Sınır aşımını hızlı retry ile aşmaya
+   çalışma.
+   Gönderim yarışı veya medya başka isteğe bağlandığı için 409 gelirse konuşma
+   geçmişini yenile; aynı POST'u ve asset'i döngüyle tekrar yollama.
+3. Medya yükleme başarılı, mesaj POST başarısızsa mesajı gönderilmemiş olarak
+   göster. Aynı asset başka mesaja bağlanmadıysa onu yeniden kullan; mesajın
+   sunucuya ulaşıp ulaşmadığı belirsizse POST'u körlemesine tekrar etme: bu API
+   istemci idempotency anahtarı almıyor. Önce konuşma geçmişini yenile; aynı
+   medyaya bağlı mevcut mesajı bulamazsan yeni gönderim dene. Medya başka mesaja
+   bağlandıysa yeni gönderi için yeni asset yükle.
+4. Upload veya mesaj isteği iptalinde kullanıcıya yeniden dene/sil eylemi sun.
+   Mesaj POST'u başarılı olmadan yerel gönderiyi teslim edildi sayma.
+5. SignalR `MessageCreated` ve REST yanıtı aynı mesajı gösterebilir. İkisini
+   `id` ile tekilleştir; olay gelmezse REST konuşma geçmişi otoritatif kaynaktır.
+   Reconnect sonrasında geçmişi yeniden çek. SignalR olayını tek kalıcı kopya
+   gibi kullanma.
+6. Medya binary içeriği `GET /api/media/{mediaAssetId}` üzerinden Bearer token
+   ile alınır; `Content-Type` yanıtını kullan. URL'yi public/CDN URL'si gibi
+   paylaşma. İstemci özel medya cache'ini oturumdan çıkışta, mesaj silinince,
+   engelleme veya sona erme bilgisinde temizlemeli.
+7. Backend upload'ı resumable/chunked değil; dosyayı doğrularken tam içeriği
+   bellekte tutuyor ve şu anda yerel dosya sistemine yazıyor. Mobilde aynı anda
+   çok sayıda büyük upload başlatma; bağlantı kesilirse dosyayı yeniden yüklemek
+   gerekir. Fotoğrafı istemcide küçültüp sıkıştır. Gerçek cihazlarda büyük
+   fotoğraf/ses upload'ı ve yavaş ağ davranışını ayrıca ölç.
+
+Mesaj durumu Sent=1, Delivered=2, Read=3. Alıcı, teslim/alındıktan sonra:
+
+  POST   /api/messages/{messageId}/delivered
+  POST   /api/messages/{messageId}/read
+  DELETE /api/messages/{messageId}/me
+  DELETE /api/messages/{messageId}/everyone
+
+Mesaj geçmişi cursor ile sayfalanır. `hasMore=true` ise sonraki isteğe hem
+`nextBeforeCreatedAtUtc` hem `nextBeforeMessageId` ekle.
+
+Saklama süresi mesaj gönderildiği anda başlar. Standart sohbet 1 gün saklar;
+Premium kurallarınca oluşturulan bazı sohbetler 7 gün saklayabilir. Yanıttaki
+`expiresAtUtc` değerini göster; bütün sohbetleri sabit 24 saat kabul etme. Süre
+dolunca REST geçmişi ve medya indirme erişimi hemen kapanır; arka plan temizliği
+içerik/medya referanslarını siler. Rapor kanıtı moderasyon amacıyla süreli olarak
+180 güne kadar korunabilir. Mesaj satırı veritabanında tombstone olarak kalabilir.
+
+Hata eşlemesi: 400 içerik/tür doğrulama hatası; 401 oturum; 403 katılımcı,
+engel veya medya yetkisi; 404 sohbet/medya bulunamadı veya artık görünmüyor;
+409 eşzamanlı medya/mesaj çakışması; 413 yükleme boyutu sınırı; 429 hız sınırı.
+İstemci hata metnini API yanıtından gösterebilir ama erişim kararını kendisi
+üretmemeli.
+
+  GET  /api/notifications?pageSize=50
+  POST /api/notifications/{notificationId}/read
+  POST /api/notifications/read-all
+
+Bildirim sayfası `nextBeforeCreatedAtUtc` ve `nextBeforeId` imleçlerini döndürür.
+Bildirimi okundu yapmak, eşleşme/takip/mesaj isteğini kabul etmekten ayrıdır.
+
+6. ENGEL, ÇEVRİMİÇİ DURUM VE GÜVENLİK
+-------------------------------------
+
+  GET    /api/presence/{userId}
+  GET    /api/blocks
+  POST   /api/blocks/{userId}
+  DELETE /api/blocks/{userId}
+  POST   /api/reports
+
+`PUT /api/privacy` tam tercih nesnesi bekler. Her çağrıda bütün alanları
+gönder: `showReadReceipts`, `showLastSeen`, `showOnlineStatus`,
+`allowMessageRequests`, `allowCallsFromNonMatches`, `showPremiumBadge`,
+`premiumPriorityOptIn`, `showFollowers`, `showFollowing`. Kısmi gövde yollama;
+eksik boolean alanlar false olarak kaydedilebilir.
+
+Engelleme sonrası hesabı yerel kişi/hikâye şeritlerinden çıkarıp istekleri,
+eşleşmeleri ve profili yenile. Backend engel varken yeni takip/mesaj/arama
+işlemlerini ve korumalı profil, hikâye medyası ve çevrimiçi durum erişimini
+reddeder. Önceden önbelleğe alınmış özel medya yanıtını göstermeye devam etme.
+Mevcut sohbet geçmişi katılımcılara açık kalır; engel bu geçmişi silmez.
+
+7. MEDYA VE HİKÂYE
+------------------
+
+  POST /api/media?category=<sayı>   multipart alanı: file
+  GET  /api/media/{mediaAssetId}    bearer token ile binary yanıt
+
+MediaCategory: ProfilePhoto=1, MessageImage=2, MessageVoice=3, StoryImage=4,
+StoryVideo=5, MessageVideo=6. Önce yükle, sonra dönen mediaAssetId'yi içeriğe
+bağla. Upload cevabı `{ id, category, contentType, lengthBytes, width, height }`
+biçimindedir. Medya yüklemesi tamamlanınca media ID hemen DB'ye kaydolur; mesaj
+bağlanmayan upload 24 saat sonra orphan cleanup ile temizlenir. Hikâye:
+
+  POST   /api/stories
+         { "mediaAssetId": "<guid>", "mediaType": 1, "caption": "..." }
+  GET    /api/stories/feed?take=50
+  GET    /api/stories/me
+  GET    /api/stories/users/{userId}
+  GET    /api/stories/{storyId}/viewers
+  DELETE /api/stories/{storyId}
+
+StoryMediaType: Image=1, Video=2. Hikâyeler sona erer; `expiresAtUtc` alanını
+kullan ve sona eren/erişimi değişen içerik için 404'ü işle.
+
+8. SIGNALR VE ARAMALAR
+----------------------
+
+Mesaj/uygulama olayları için `/hubs/messages` adresine access token ile bağlan.
+Bağlantı yeniden kurulunca ilgili REST verilerini tekrar çek; SignalR olayları
+kalıcı veri deposu değil, ekranları güncelleme kanalıdır. Bu hub'daki olaylar:
+
+  MessageCreated, MessageStatusChanged, MessageHidden, MessageDeleted,
+  ConversationUpdated, MatchCreated, MatchAccepted, MatchRejected, MatchEnded,
+  MessageRequestReceived, MessageRequestAccepted, MessageRequestRejected,
+  FollowRequestReceived, FollowAccepted, NewFollower, NotificationReceived.
+
+Arama olayları ve sinyalleşme `/hubs/calls` hub'ındadır. Çağrıyı REST
+üzerinden başlat/yanıtla/reddet/bitir; sinyalleşme metotları SendOffer,
+SendAnswer ve SendIceCandidate'dır. CallIncoming, CallAccepted, CallRejected,
+CallEnded olaylarını bu hub'dan dinle. Sinyalleşme/TURN desteği canlı ses-video
+taşımaz; bunun için uyumlu native WebRTC paketi ve özel development build
+gerekir.
+
+9. MOBİL UYGULAMA İŞ SIRASI
+---------------------------
+
+1. API adresi, güvenli token yenileme ve korumalı medya yükleme.
+2. Profil, görünürlük ve gizlilik tercihleri.
+3. Kişi/hikâye şeritleri, takip, takip istekleri ve bildirimler.
+4. Ruh hâli keşfi ve eşleşme istekleri (takipten ayrı).
+5. Sohbetler, mesaj istekleri ve SignalR güncellemeleri.
+6. Medya, engelleme/şikâyet ve çevrimiçi durum gösterimi.
+7. Native WebRTC (özel development build hazır olunca); uzaktan push
+   sağlayıcısı seçilince push token kaydı ve teslimatı.
+
+10. DAĞITIM NOTU
+----------------
+
+Takip/gizlilik ve raporlanan hikâye kanıtı migration'ları:
+
+  MindMatch.Infrastructure/Migrations/20261027170506_CompleteFollowAndPrivacySchema.cs
+  MindMatch.Infrastructure/Migrations/20261027172234_AddReportedStoryEvidence.cs
+
+Bu migration'lar yerel geliştirme veritabanında uygulanmış durumda; başka
+ortamlar için deploy öncesi migration'ları dağıtım pipeline'ında uygula. Üretim
+`Cors:AllowedOrigins` ayarına gerçek uygulama origin'lerini ekle. Backend medya
+depolaması şu anda yerel dosya sistemi kullanıyor; birden fazla API instance'ı
+çalıştırılacaksa paylaşılan/nesne depolama ve yedekleme yapılandırılmalı.
+
+11. DİĞER REST API SÖZLEŞMELERİ
+-------------------------------
+
+Bu bölüm önceki bölümlerde bulunmayan uçları ve davranışlarını tamamlar.
+
+Kayıt / parola / oturum:
+
+  POST /api/auth/register
+  { "email": "...", "password": "en-az-8-karakter", "displayName": "...", "nickname": "..." }
+  POST /api/auth/login                 { "email": "...", "password": "..." }
+  POST /api/auth/reactivate            login gövdesi
+  POST /api/auth/refresh               { "refreshToken": "..." }
+  POST /api/auth/logout                { "refreshToken": "..." }
+  POST /api/auth/logout-all
+  POST /api/auth/change-password       { "currentPassword": "...", "newPassword": "..." }
+  POST /api/auth/forgot-password       { "email": "..." }
+  POST /api/auth/reset-password        { "token": "...", "newPassword": "..." }
+  GET  /api/auth/me
+
+Parola en az 8, en fazla 100 karakterdir. Kayıt e-posta ve görünen ad ister;
+nickname isteğe bağlıdır. `forgot-password` e-postanın kayıtlı olup olmadığını
+açıklamayan aynı yanıtı verir. Reset token'ı tek kullanımlıdır; geçersiz/süresi
+dolan token için 401'i, parola doğrulama hataları için 400'ü işle. Login normalde
+devre dışı hesabı açmaz; reaktivasyon için `reactivate` kullan. Logout refresh
+token'ı iptal eder, logout-all tüm oturumları geçersiz kılar.
+
+Profil ve tercihler:
+
+  GET/PUT /api/profiles/me
+  GET     /api/profiles/{userId}
+  PATCH   /api/profiles/me/visibility?isVisible=true|false
+  PUT     /api/profiles/me/preferences
+  GET/PUT /api/privacy
+  GET/PUT /api/preferences/music
+  GET     /api/interests
+  PUT     /api/interests/me { "interestIds": ["<guid>"] }
+
+Profil güncellemesi `displayName` (zorunlu), `nickname`, `bio`, `birthDate`
+(ISO `YYYY-MM-DD`), `gender`, `genderPreference`, `minimumMatchAge`,
+`maximumMatchAge` ve `city` alanlarını alır. Yaş aralığı 18-100; nickname
+3-30 karakter ve harf/rakam/nokta/alt çizgi ile sınırlıdır. Başka kullanıcının
+gizli profiline erişim reddedilebilir; gizlilik kararı backend'e aittir.
+`/api/privacy` ve `/api/profiles/me/preferences` aynı profil tercihlerini
+değiştiren uçlardır. İki uç da tam boolean nesnesi bekler; gönderilecek alanlar:
+`allowMessageRequests`, `allowCallsFromNonMatches`, `showOnlineStatus`,
+`showLastSeen`, `showReadReceipts`, `showPremiumBadge`, `premiumPriorityOptIn`,
+`showFollowers`, `showFollowing`. Müzik tercihi `{ "genres": ["...", "..."] }`;
+ilgi alanı güncellemesi ID listesidir. Kaydedilen listeleri tekrar GET ile çek.
+
+Takipçi fotoğrafları:
+
+  GET    /api/profiles/me/photos
+  GET    /api/profiles/{userId}/photos
+  POST   /api/profiles/me/photos { "mediaAssetId": "<guid>" }
+  PUT    /api/profiles/me/photos/{photoId}/primary
+  DELETE /api/profiles/me/photos/{photoId}
+
+Önce `ProfilePhoto=1` kategorisinde yükle, sonra ID'yi profile bağla. Yükleme ve
+bağlama ayrı işlemlerdir; bağlama başarısızsa kullanılmayan upload daha sonra
+temizlenir. Başkasının özel fotoğrafında 404 beklenebilir. Fotoğraf listesi
+public URL değil, korumalı media asset ID döndürür.
+
+Sohbet listesi işlemleri:
+
+  GET    /api/conversations
+  GET    /api/conversations/{conversationId}
+  DELETE /api/conversations/{conversationId}
+  POST   /api/conversations/{conversationId}/restore
+
+DELETE sohbeti yalnızca mevcut kullanıcının listesinde gizler; mesajları
+karşı taraftan silmez. Restore kendi gizlediği sohbeti listeye geri alır.
+`GET /api/conversations/{id}` ve mesaj geçmişi yalnızca katılımcılara açıktır.
+Bekleyen mesaj isteği kabul edilene kadar mesaj geçmişi/normal sohbet gibi
+gösterilmemelidir.
+
+Eşleşme ve Premium:
+
+  POST /api/matches                         { "receiverId": "<guid>" }
+  POST /api/matches/{receiverId}
+  GET  /api/matches  veya /api/matches/me
+  GET  /api/matches/requests
+  POST /api/matches/{matchId}/accept|reject|end
+  GET  /api/premium/me
+
+Eşleşme isteğinde mevcut engel, karşı tarafın etkinliği ve yinelenen istek
+kuralları uygulanır. Durum `MatchStatus` enum sayısıdır; HTTP 409 yinelenen veya
+eşzamanlı istek anlamına gelebilir. Başarılı kabul sohbet oluşturabilir;
+yanıttaki `conversationId` null olabileceğinden her zaman kontrol et. Premium
+yanıtını uygulama açılışında ve abonelik değişiminde çek; Premium yetkisini
+istemci tarafında üretme.
+
+Engelleme ve raporlama:
+
+  GET    /api/blocks
+  POST   /api/blocks/{userId}
+  DELETE /api/blocks/{userId}
+  POST   /api/reports
+  GET    /api/reports/me
+
+Rapor gövdesi `{ "reportedUserId": "<guid>", "reason": 1,
+"description": "...", "conversationId": "<guid-or-null>",
+"messageIds": ["<guid>"], "storyId": "<guid-or-null>" }` biçimindedir.
+ReportReason: Harassment=1, Insult=2, SexualContent=3, Spam=4, FakeProfile=5,
+Threat=6, InappropriateMedia=7, Other=8. Bir raporda en fazla 10 farklı mesaj
+kanıtı gönderilebilir; yalnızca seçilen sohbette raporlanan kullanıcının
+gönderdiği mesajlar eklenebilir. Hikâye raporu için `storyId` gönder ve aynı
+istekte `conversationId`/`messageIds` gönderme. Rapor gönderimi 5/saat sınırına
+tabidir. Raporlayana admin kanıt içeriği açılmaz. Engelleme sohbet geçmişini
+silmez; yeni mesaj, takip ve arama erişimini durdurur.
+
+Yönetici/moderatör moderasyonu:
+
+Bu `/api/admin` uçları yalnızca `Admin` veya `Moderator` rolü olan hesaplara
+açıktır; normal kullanıcı ekranına koyma. Rapor kuyruğu, metin/hikâye kanıtı,
+medya incelemesi ve işlem geçmişi backend'de vardır:
+
+  GET  /api/admin/reports?status=<ReportStatus>&take=50
+  GET  /api/admin/reports/{reportId}
+  GET  /api/admin/reports/{reportId}/messages
+  GET  /api/admin/reports/{reportId}/stories
+  GET  /api/admin/reports/{reportId}/media/{mediaAssetId}
+  POST /api/admin/reports/{reportId}/assign
+  POST /api/admin/reports/{reportId}/resolve
+       { "resolution": "...", "violationConfirmed": true }
+  POST /api/admin/users/{userId}/freeze
+       { "reason": "...", "untilUtc": "<UTC timestamp-or-null>" }
+  POST /api/admin/users/{userId}/activate { "reason": "..." }
+  GET  /api/admin/users/{userId}/moderation-history
+
+`take` 1-100 arasındadır. Moderatör raporu kendine atayıp sonuçlandırabilir;
+yalnızca atanmış moderatör resolve eder. Hesap dondurma/aktifleştirme Admin
+rolü gerektirir. Kanıt ayrıntısı/medya erişimi moderation audit kaydına yazılır.
+Hikâye/mesaj kanıtı 180 gün sonra temizlenir. Medya yanıtını yalnızca admin UI
+içinde, bellekte/geçici göster; public URL veya kalıcı cache üretme.
+
+Hesap durumu:
+
+  GET  /api/account/status
+  POST /api/account/freeze
+  POST /api/account/activate
+
+Bu mevcut uçlar hesabı geçici devre dışı bırakıp yeniden etkinleştirir; kalıcı
+hesap silme/anonymize API'si değildir. Kalıcı silme butonu bu uçlara bağlanmamalı.
+
+Aramalar:
+
+  GET  /api/calls/turn-credentials
+  POST /api/calls { "conversationId": "<guid>", "type": 1 }
+  GET  /api/calls/{callId}
+  GET  /api/conversations/{conversationId}/calls
+  POST /api/calls/{callId}/answer  (accept alias'i de vardır)
+  POST /api/calls/{callId}/reject
+  POST /api/calls/{callId}/end
+
+CallType: Audio=1, Video=2. CallStatus: Ringing=1, Answered=2, Rejected=3,
+Missed=4, Ended=5. REST arama durumunu oluşturur/değiştirir; audio/video
+taşımaz. TURN credential yanıtı `urls`, `username`, `credential`,
+`expiresAtUtc` içerir; `no-store` uygulanmalı. Teklif/yanıt/ICE signaling
+`/hubs/calls` üzerinden taşınır; metin payload'ı en fazla 32000 karakterdir.
+Çağrı uçları iki tarafın aktif sohbeti, engel ve arama gizlilik tercihlerini
+doğrular. WebRTC medya için ayrıca native WebRTC gereklidir.
+
+Geliştirici için backend'de bulunmayan uçlar:
+
+- Push token kaydı ve push sağlayıcısına teslim API'si henüz yok. SignalR yalnızca
+  uygulama bağlıyken canlı olay taşır; push bildirimi yerine geçmez.
+- Kalıcı hesap silme/veri dışa aktarma uçları henüz yok. `account/freeze` yalnızca
+  geçici deaktivasyondur.
+- Dosya gönderimi ve mesaj POST idempotency anahtarı desteklenmiyor.
+
+Controller'larda aynı işlev için ek route alias'ları bulunabilir (`/api/auths`,
+`/api/UserProfiles`, `/api/Matches`, `/api/Messages/conversation/...`). Mobil
+uygulama yukarıda yazılı canonical küçük harfli yolları kullanmalı; alias'lara
+bağımlı olmamalı.

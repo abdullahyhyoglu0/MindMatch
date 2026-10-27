@@ -15,10 +15,11 @@ public sealed class PresenceController : ControllerBase
     private readonly IUserRepository _users;
     private readonly IUserProfileRepository _profiles;
     private readonly IUserBlockRepository _blocks;
+    private readonly IUserFollowRepository _follows;
 
     public PresenceController(RedisPresenceTracker presence, IUserRepository users,
-        IUserProfileRepository profiles, IUserBlockRepository blocks)
-    { _presence = presence; _users = users; _profiles = profiles; _blocks = blocks; }
+        IUserProfileRepository profiles, IUserBlockRepository blocks, IUserFollowRepository follows)
+    { _presence = presence; _users = users; _profiles = profiles; _blocks = blocks; _follows = follows; }
 
     [HttpGet("{userId:guid}")]
     public async Task<IActionResult> Get(Guid userId, CancellationToken cancellationToken)
@@ -30,7 +31,9 @@ public sealed class PresenceController : ControllerBase
         var user = await _users.GetByIdAsync(userId, cancellationToken);
         var profile = await _profiles.GetByUserIdAsync(userId, cancellationToken);
         if (user is null || !user.IsActive || profile is null ||
-            (userId != viewerId && !profile.IsProfileVisible)) return NotFound();
+            (userId != viewerId && !profile.IsProfileVisible &&
+                !await _follows.IsAcceptedAsync(viewerId, userId, cancellationToken)))
+            return NotFound();
 
         var (online, lastSeen) = await _presence.GetStatusAsync(userId);
         if (userId != viewerId)

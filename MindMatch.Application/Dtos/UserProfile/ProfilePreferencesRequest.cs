@@ -9,4 +9,6 @@ public sealed class ProfilePreferencesRequest
     public bool ShowReadReceipts { get; set; }
     public bool ShowPremiumBadge { get; set; } = true;
     public bool PremiumPriorityOptIn { get; set; }
+    public bool ShowFollowers { get; set; } = true;
+    public bool ShowFollowing { get; set; } = true;
 }

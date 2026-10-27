@@ -11,4 +11,5 @@ public interface IReportRepository
     Task AddAuditAsync(ModerationAudit audit, CancellationToken cancellationToken = default);
     Task<List<ModerationAudit>> GetAuditByUserAsync(Guid userId, CancellationToken cancellationToken = default);
     Task<int> ClearExpiredEvidenceBatchAsync(DateTime nowUtc, int take, CancellationToken cancellationToken = default);
+    Task<int> ClearExpiredStoryEvidenceBatchAsync(DateTime nowUtc, int take, CancellationToken cancellationToken = default);
 }

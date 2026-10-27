@@ -50,6 +50,20 @@ public sealed class AdminController : ControllerBase
         catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
+    [HttpGet("reports/{reportId:guid}/stories")]
+    public async Task<IActionResult> GetReportStories(Guid reportId, CancellationToken cancellationToken)
+    {
+        var actor = GetUserId();
+        if (actor is null) return Unauthorized();
+        try
+        {
+            var report = await _service.GetAdminDetailAsync(actor.Value, reportId, cancellationToken);
+            return Ok(report.Stories);
+        }
+        catch (KeyNotFoundException ex) { return NotFound(new { message = ex.Message }); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
     [HttpGet("reports/{reportId:guid}/media/{mediaAssetId:guid}")]
     public async Task<IActionResult> GetReportMedia(Guid reportId, Guid mediaAssetId,
         CancellationToken cancellationToken)

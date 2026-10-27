@@ -7,12 +7,15 @@ public sealed class UserBlockService : IUserBlockService
 {
     private readonly IUserBlockRepository _repository;
     private readonly IUserRepository _users;
+    private readonly IUserFollowRepository _follows;
     private readonly IUnitOfWork _unitOfWork;
 
-    public UserBlockService(IUserBlockRepository repository, IUserRepository users, IUnitOfWork unitOfWork)
+    public UserBlockService(IUserBlockRepository repository, IUserRepository users,
+        IUserFollowRepository follows, IUnitOfWork unitOfWork)
     {
         _repository = repository;
         _users = users;
+        _follows = follows;
         _unitOfWork = unitOfWork;
     }
 
@@ -21,10 +24,9 @@ public sealed class UserBlockService : IUserBlockService
         ValidateIds(blockerId, blockedUserId);
         if (await _users.GetByIdAsync(blockedUserId, cancellationToken) is null)
             throw new KeyNotFoundException("Kullanıcı bulunamadı.");
-        if (await _repository.IsBlockedByAsync(blockerId, blockedUserId, cancellationToken))
-            return;
-
-        await _repository.AddAsync(new UserBlock(blockerId, blockedUserId), cancellationToken);
+        if (!await _repository.IsBlockedByAsync(blockerId, blockedUserId, cancellationToken))
+            await _repository.AddAsync(new UserBlock(blockerId, blockedUserId), cancellationToken);
+        await _follows.RemoveBetweenAsync(blockerId, blockedUserId, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 

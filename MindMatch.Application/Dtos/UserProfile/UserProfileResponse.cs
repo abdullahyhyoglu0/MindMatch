@@ -32,7 +32,14 @@ public class UserProfileResponse
     public bool ShowReadReceipts { get; set; }
     public bool ShowPremiumBadge { get; set; }
     public bool PremiumPriorityOptIn { get; set; }
+    public bool ShowFollowers { get; set; } = true;
+    public bool ShowFollowing { get; set; } = true;
     public int? Age { get; set; }
+    public int FollowerCount { get; set; }
+    public int FollowingCount { get; set; }
+    public bool CanViewProfile { get; set; } = true;
+    public FollowRelation FollowRelation { get; set; }
+    public DiscoverMessagingMode MessagingMode { get; set; }
 
     public List<Guid> InterestIds { get; set; } = [];
     public List<string> DiscoveryReasons { get; set; } = [];

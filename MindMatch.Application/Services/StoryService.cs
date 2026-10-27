@@ -12,10 +12,73 @@ public sealed class StoryService : IStoryService
     private readonly IUserBlockRepository _blocks;
     private readonly IMediaAssetRepository _assets;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IUserFollowRepository _follows;
+    private readonly IUserPresenceReader _presence;
+
+    public StoryService(IStoryRepository stories, IUserRepository users, IUserProfileRepository profiles,
+        IUserBlockRepository blocks, IMediaAssetRepository assets, IUnitOfWork unitOfWork,
+        IUserFollowRepository follows, IUserPresenceReader presence)
+    { _stories = stories; _users = users; _profiles = profiles; _blocks = blocks; _assets = assets;
+      _unitOfWork = unitOfWork; _follows = follows; _presence = presence; }
 
     public StoryService(IStoryRepository stories, IUserRepository users, IUserProfileRepository profiles,
         IUserBlockRepository blocks, IMediaAssetRepository assets, IUnitOfWork unitOfWork)
-    { _stories = stories; _users = users; _profiles = profiles; _blocks = blocks; _assets = assets; _unitOfWork = unitOfWork; }
+        : this(stories, users, profiles, blocks, assets, unitOfWork, null!, null!) { }
+
+    public async Task<List<StoryTrayItemResponse>> GetTrayAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (_follows is null || _presence is null)
+            throw new InvalidOperationException("Hikâye tepsisi bağımlılıkları yapılandırılmamış.");
+        if (userId == Guid.Empty) throw new ArgumentException("Kullanıcı kimliği geçersiz.");
+        var followed = await _follows.GetAcceptedFollowedIdsAsync(userId, cancellationToken);
+        var ids = followed.Append(userId).Distinct().ToArray();
+        var blocked = await _blocks.GetRelatedUserIdsAsync(userId, cancellationToken);
+        var stories = await _stories.GetFeedAsync(userId, blocked, 500, cancellationToken);
+        var ownStories = await _stories.GetByUserIdAsync(userId, cancellationToken);
+        stories.AddRange(ownStories);
+        stories = stories.Where(x => ids.Contains(x.UserId)).ToList();
+        var viewedIds = await _stories.GetViewedStoryIdsAsync(userId, stories.Select(x => x.Id).ToArray(), cancellationToken);
+        var viewed = viewedIds.ToHashSet();
+        var statuses = await _presence.GetStatusesAsync(ids, cancellationToken);
+        var profiles = (await _profiles.GetByUserIdsAsync(ids, cancellationToken)).ToDictionary(x => x.UserId);
+        var trays = stories.GroupBy(x => x.UserId).Select(group =>
+        {
+            var isSelf = group.Key == userId;
+            var groupedStories = group.OrderBy(x => x.CreatedAtUtc).Select(x => Map(x, viewed.Contains(x.Id))).ToList();
+            var status = statuses.GetValueOrDefault(group.Key);
+            var profile = profiles.GetValueOrDefault(group.Key);
+            return new StoryTrayItemResponse
+            {
+                UserId = group.Key, IsSelf = isSelf, HasActiveStory = true,
+                HasUnseenStory = groupedStories.Any(x => !x.HasViewed),
+                IsOnline = profile?.ShowOnlineStatus == true ? status.IsOnline : null,
+                LastSeenAtUtc = profile?.ShowLastSeen == true && profile.ShowOnlineStatus
+                    ? status.LastSeenAtUtc : null,
+                Stories = groupedStories
+            };
+        }).ToList();
+        foreach (var followedId in followed.Where(id => trays.All(x => x.UserId != id)))
+        {
+            var profile = profiles.GetValueOrDefault(followedId);
+            var status = statuses.GetValueOrDefault(followedId);
+            trays.Add(new StoryTrayItemResponse
+            {
+                UserId = followedId,
+                IsOnline = profile?.ShowOnlineStatus == true ? status.IsOnline : null,
+                LastSeenAtUtc = profile?.ShowLastSeen == true && profile.ShowOnlineStatus ? status.LastSeenAtUtc : null
+            });
+        }
+        if (trays.All(x => !x.IsSelf))
+        {
+            var profile = profiles.GetValueOrDefault(userId);
+            var status = statuses.GetValueOrDefault(userId);
+            trays.Add(new StoryTrayItemResponse { UserId = userId, IsSelf = true,
+                IsOnline = profile?.ShowOnlineStatus == true ? status.IsOnline : null,
+                LastSeenAtUtc = profile?.ShowLastSeen == true && profile.ShowOnlineStatus ? status.LastSeenAtUtc : null });
+        }
+        return trays.OrderByDescending(x => x.IsSelf).ThenByDescending(x => x.HasActiveStory)
+            .ThenByDescending(x => x.IsOnline == true).ToList();
+    }
 
     public async Task<StoryResponse> CreateAsync(Guid userId, CreateStoryRequest request, CancellationToken cancellationToken = default)
     {
@@ -64,7 +127,8 @@ public sealed class StoryService : IStoryService
         {
             var profile = await _profiles.GetByUserIdAsync(userId, cancellationToken);
             var owner = await _users.GetByIdAsync(userId, cancellationToken);
-            if (profile is null || !profile.IsProfileVisible || owner is null || !owner.IsActive ||
+            if (profile is null || owner is null || !owner.IsActive ||
+                !(await SocialAccess.CanViewProfileAsync(viewerId, profile, _follows, cancellationToken)) ||
                 await _blocks.IsBlockedEitherWayAsync(viewerId, userId, cancellationToken))
                 throw new KeyNotFoundException("Hikâye bulunamadı.");
         }
@@ -119,7 +183,8 @@ public sealed class StoryService : IStoryService
         {
             var owner = await _users.GetByIdAsync(story.UserId, cancellationToken);
             var profile = await _profiles.GetByUserIdAsync(story.UserId, cancellationToken);
-            if (owner is null || !owner.IsActive || profile is null || !profile.IsProfileVisible ||
+            if (owner is null || !owner.IsActive || profile is null ||
+                !(await SocialAccess.CanViewProfileAsync(viewerId, profile, _follows, cancellationToken)) ||
                 await _blocks.IsBlockedEitherWayAsync(viewerId, story.UserId, cancellationToken))
                 throw new KeyNotFoundException("Hikâye bulunamadı.");
         }

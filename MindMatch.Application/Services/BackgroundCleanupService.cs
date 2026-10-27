@@ -34,7 +34,8 @@ public sealed class BackgroundCleanupService : IBackgroundCleanupService
         var failures = new List<Exception>();
         var now = DateTime.UtcNow;
         var clearedEvidence = await _reports.ClearExpiredEvidenceBatchAsync(now, BatchSize, cancellationToken);
-        if (clearedEvidence > 0) await _unitOfWork.SaveChangesAsync(cancellationToken);
+        var clearedStoryEvidence = await _reports.ClearExpiredStoryEvidenceBatchAsync(now, BatchSize, cancellationToken);
+        if (clearedEvidence + clearedStoryEvidence > 0) await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var deletedResetTokens = await _passwordResetTokens.DeleteInactiveBatchAsync(now, BatchSize, cancellationToken);
         var deletedRefreshTokens = await _refreshTokens.DeleteInactiveBatchAsync(now, BatchSize, cancellationToken);

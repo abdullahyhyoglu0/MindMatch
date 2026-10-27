@@ -21,7 +21,9 @@ public sealed class StoryRepository : IStoryRepository
         var now = DateTime.UtcNow;
         return _context.Stories.Where(x => x.UserId != viewerId && !x.IsDeleted && x.ExpiresAtUtc > now &&
                 !excludedUserIds.Contains(x.UserId) &&
-                _context.UserProfiles.Any(p => p.UserId == x.UserId && p.IsProfileVisible) &&
+                _context.UserProfiles.Any(p => p.UserId == x.UserId &&
+                    (p.IsProfileVisible || _context.UserFollows.Any(f => f.FollowerId == viewerId &&
+                        f.FollowedId == x.UserId && f.Status == FollowStatus.Accepted))) &&
                 _context.Users.Any(u => u.Id == x.UserId && u.IsActive))
             .OrderByDescending(x => x.CreatedAtUtc).Take(take).ToListAsync(cancellationToken);
     }
@@ -63,4 +65,17 @@ public sealed class StoryRepository : IStoryRepository
     public Task<List<Story>> GetExpiredBatchAsync(DateTime nowUtc, int take, CancellationToken cancellationToken = default) =>
         _context.Stories.Where(x => !x.IsDeleted && x.ExpiresAtUtc <= nowUtc)
             .OrderBy(x => x.ExpiresAtUtc).Take(take).ToListAsync(cancellationToken);
+
+    public Task<List<Guid>> GetActiveStoryOwnerIdsAsync(IReadOnlyCollection<Guid> userIds,
+        CancellationToken cancellationToken = default) => userIds.Count == 0
+        ? Task.FromResult(new List<Guid>())
+        : _context.Stories.Where(x => userIds.Contains(x.UserId) && !x.IsDeleted && x.ExpiresAtUtc > DateTime.UtcNow)
+            .Select(x => x.UserId).Distinct().ToListAsync(cancellationToken);
+
+    public Task<List<Story>> GetLatestActiveByUserIdsAsync(IReadOnlyCollection<Guid> userIds,
+        CancellationToken cancellationToken = default) => userIds.Count == 0
+        ? Task.FromResult(new List<Story>())
+        : _context.Stories.Where(x => userIds.Contains(x.UserId) && !x.IsDeleted && x.ExpiresAtUtc > DateTime.UtcNow)
+            .GroupBy(x => x.UserId).Select(g => g.OrderByDescending(x => x.CreatedAtUtc).First())
+            .ToListAsync(cancellationToken);
 }

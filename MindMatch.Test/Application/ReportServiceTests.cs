@@ -1,5 +1,6 @@
 using System.Reflection;
 using MindMatch.Application.Dtos.Moderation;
+using MindMatch.Application.Dtos.Stories;
 using MindMatch.Application.Interfaces;
 using MindMatch.Application.Services;
 using MindMatch.Domain.Entities;
@@ -83,12 +84,39 @@ public sealed class ReportServiceTests
         Assert.Equal(1, fixture.SaveCount);
     }
 
+    [Fact]
+    public async Task Submit_StoresSnapshotForReportedStoryAndAdminCanReviewIt()
+    {
+        var fixture = new Fixture();
+        fixture.StoryToReport = new Story(fixture.Reported.Id, StoryMediaType.Image,
+            Guid.NewGuid(), "reported story");
+
+        var created = await fixture.Service.SubmitAsync(fixture.Reporter.Id, new CreateReportRequest
+        {
+            ReportedUserId = fixture.Reported.Id,
+            Reason = ReportReason.InappropriateMedia,
+            StoryId = fixture.StoryToReport.Id
+        });
+
+        Assert.NotNull(fixture.SavedReport);
+        Assert.Single(fixture.SavedReport!.Stories);
+        Assert.Empty(created.Stories);
+        fixture.ReportToView = fixture.SavedReport;
+        var detail = await fixture.Service.GetAdminDetailAsync(fixture.Moderator.Id, fixture.SavedReport.Id);
+        var storyEvidence = Assert.Single(detail.Stories);
+        Assert.Equal(fixture.StoryToReport.Caption, storyEvidence.CaptionSnapshot);
+        Assert.Equal(fixture.StoryToReport.MediaAssetId, storyEvidence.MediaAssetIdSnapshot);
+        Assert.Contains(fixture.Audits, x => x.Action == ModerationActionType.ReportEvidenceViewed &&
+            x.ReportId == fixture.SavedReport.Id);
+    }
+
     private sealed class Fixture
     {
         public User Reporter { get; } = new("reporter@test.invalid", "hash");
         public User Reported { get; } = new("reported@test.invalid", "hash");
         public User Moderator { get; } = new("moderator@test.invalid", "hash");
         public Conversation Conversation { get; }
+        public Story? StoryToReport { get; set; }
         public UserReport? SavedReport { get; private set; }
         public UserReport? ReportToView { get; set; }
         public List<ModerationAudit> Audits { get; } = [];
@@ -133,6 +161,17 @@ public sealed class ReportServiceTests
                 Proxy<IUnitOfWork>((method, _) => method.Name switch
                 {
                     nameof(IUnitOfWork.SaveChangesAsync) => SaveChanges(),
+                    _ => throw new NotSupportedException(method.Name)
+                }),
+                Proxy<IStoryRepository>((method, args) => method.Name switch
+                {
+                    nameof(IStoryRepository.GetByIdAsync) => Task.FromResult(
+                        StoryToReport?.Id == (Guid)args![0]! ? StoryToReport : null),
+                    _ => throw new NotSupportedException(method.Name)
+                }),
+                Proxy<IStoryService>((method, _) => method.Name switch
+                {
+                    nameof(IStoryService.GetAsync) => Task.FromResult(new StoryResponse()),
                     _ => throw new NotSupportedException(method.Name)
                 }));
         }

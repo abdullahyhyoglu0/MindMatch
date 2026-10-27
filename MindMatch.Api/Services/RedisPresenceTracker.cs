@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
 using StackExchange.Redis;
+using MindMatch.Application.Interfaces;
 
 namespace MindMatch.Api.Services;
 
-public sealed class RedisPresenceTracker
+public sealed class RedisPresenceTracker : IUserPresenceReader
 {
     private static readonly TimeSpan Lease = TimeSpan.FromSeconds(90);
     private readonly IDatabase _database;
@@ -86,6 +87,18 @@ public sealed class RedisPresenceTracker
             : DateTime.TryParse(text, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
                 ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc) : null;
         return (count > 0, seenAtUtc);
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, (bool IsOnline, DateTime? LastSeenAtUtc)>> GetStatusesAsync(
+        IReadOnlyCollection<Guid> userIds, CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<Guid, (bool IsOnline, DateTime? LastSeenAtUtc)>(userIds.Count);
+        foreach (var userId in userIds.Distinct())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            result[userId] = await GetStatusAsync(userId);
+        }
+        return result;
     }
 
     public async Task RefreshLocalLeasesAsync(CancellationToken cancellationToken)

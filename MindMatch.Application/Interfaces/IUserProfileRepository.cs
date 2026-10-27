@@ -34,6 +34,14 @@ namespace MindMatch.Application.Interfaces
             CancellationToken cancellationToken = default);
         Task RecordDiscoveryDecisionAsync(Guid viewerId, Guid targetUserId, bool rejected,
             CancellationToken cancellationToken = default);
+
+        Task<List<UserProfile>> GetByUserIdsAsync(IReadOnlyCollection<Guid> userIds,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new List<UserProfile>());
+
+        Task<List<UserProfile>> ListVisiblePeopleAsync(IReadOnlyCollection<Guid> excludedUserIds,
+            int skip, int take, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new List<UserProfile>());
     }
 
 }

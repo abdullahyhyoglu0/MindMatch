@@ -31,11 +31,15 @@ var builder = WebApplication.CreateBuilder(args);
 
 
 builder.Services.AddControllers();
-var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+if (allowedOrigins.Length == 0)
+    throw new InvalidOperationException("En az bir Cors:AllowedOrigins değeri tanımlanmalıdır.");
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
 {
-    if (corsOrigins.Length > 0)
-        policy.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials();
+    policy.WithOrigins(allowedOrigins)
+          .AllowAnyHeader()
+          .AllowAnyMethod()
+          .AllowCredentials();
 }));
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler(options =>
@@ -54,6 +58,7 @@ var redisConnection = builder.Configuration.GetConnectionString("Redis")
     ?? throw new InvalidOperationException("Redis bağlantı ayarı bulunamadı.");
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnection));
 builder.Services.AddSingleton<RedisPresenceTracker>();
+builder.Services.AddSingleton<IUserPresenceReader>(sp => sp.GetRequiredService<RedisPresenceTracker>());
 builder.Services.AddHostedService<RedisPresenceHeartbeat>();
 builder.Services.AddSingleton<RedisRateLimiter>();
 builder.Services.AddScoped<ActiveUserHubFilter>();
@@ -164,6 +169,7 @@ builder.Services.AddScoped<IUserRepository, UserRepository>();
 
 builder.Services.AddScoped<IUserInterestRepository, UserInterestRepository>();
 builder.Services.AddScoped<IUserBlockRepository, UserBlockRepository>();
+builder.Services.AddScoped<IUserFollowRepository, UserFollowRepository>();
 builder.Services.AddScoped<IReportRepository, ReportRepository>();
 builder.Services.AddScoped<IMessageRequestRepository, MessageRequestRepository>();
 builder.Services.AddScoped<ICallRepository, CallRepository>();
@@ -213,6 +219,7 @@ builder.Services.AddScoped<IDiscoveryService, DiscoveryService>();
 
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IUserBlockService, UserBlockService>();
+builder.Services.AddScoped<IUserFollowService, UserFollowService>();
 builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IMessageRequestService, MessageRequestService>();
@@ -368,7 +375,7 @@ if (app.Environment.IsDevelopment())
 
 
 
-app.UseHttpsRedirection();
+// app.UseHttpsRedirection(); // Disabled for local development to prevent SSL errors on localhost:5193
 app.UseExceptionHandler();
 app.UseCors();
 

@@ -56,6 +56,8 @@ namespace MindMatch.Domain.Entities
         public bool ShowReadReceipts { get; private set; } = true;
         public bool ShowPremiumBadge { get; private set; } = true;
         public bool PremiumPriorityOptIn { get; private set; }
+        public bool ShowFollowers { get; private set; } = true;
+        public bool ShowFollowing { get; private set; } = true;
 
         private UserProfile()
         {
@@ -178,7 +180,7 @@ namespace MindMatch.Domain.Entities
 
         public void UpdatePreferences(bool allowMessageRequests, bool allowCallsFromNonMatches,
             bool showOnlineStatus, bool showLastSeen, bool showReadReceipts, bool showPremiumBadge,
-            bool premiumPriorityOptIn = false)
+            bool premiumPriorityOptIn = false, bool showFollowers = true, bool showFollowing = true)
         {
             AllowMessageRequests = allowMessageRequests;
             AllowCallsFromNonMatches = allowCallsFromNonMatches;
@@ -187,6 +189,8 @@ namespace MindMatch.Domain.Entities
             ShowReadReceipts = showReadReceipts;
             ShowPremiumBadge = showPremiumBadge;
             PremiumPriorityOptIn = premiumPriorityOptIn;
+            ShowFollowers = showFollowers;
+            ShowFollowing = showFollowing;
             MarkAsUpdated();
         }
     }

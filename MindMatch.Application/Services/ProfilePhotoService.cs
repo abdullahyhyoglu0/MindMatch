@@ -12,7 +12,13 @@ public sealed class ProfilePhotoService : IProfilePhotoService
     private readonly IUserProfileRepository _profiles;
     private readonly IUserRepository _users;
     private readonly IUserBlockRepository _blocks;
+    private readonly IUserFollowRepository? _follows;
     private readonly IUnitOfWork _unitOfWork;
+
+    public ProfilePhotoService(IProfilePhotoRepository photos, IMediaAssetRepository assets,
+        IUserProfileRepository profiles, IUserRepository users, IUserBlockRepository blocks, IUnitOfWork unitOfWork,
+        IUserFollowRepository follows)
+    { _photos = photos; _assets = assets; _profiles = profiles; _users = users; _blocks = blocks; _unitOfWork = unitOfWork; _follows = follows; }
 
     public ProfilePhotoService(IProfilePhotoRepository photos, IMediaAssetRepository assets,
         IUserProfileRepository profiles, IUserRepository users, IUserBlockRepository blocks, IUnitOfWork unitOfWork)
@@ -25,7 +31,9 @@ public sealed class ProfilePhotoService : IProfilePhotoService
         {
             var profile = await _profiles.GetByUserIdAsync(profileUserId, cancellationToken);
             var owner = await _users.GetByIdAsync(profileUserId, cancellationToken);
-            if (profile is null || !profile.IsProfileVisible || owner is null || !owner.IsActive ||
+            if (profile is null || owner is null || !owner.IsActive ||
+                !(profile.IsProfileVisible || (_follows is not null &&
+                    await _follows.IsAcceptedAsync(viewerId, profileUserId, cancellationToken))) ||
                 await _blocks.IsBlockedEitherWayAsync(viewerId, profileUserId, cancellationToken))
                 throw new KeyNotFoundException("Profil bulunamadı.");
         }

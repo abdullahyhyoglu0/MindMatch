@@ -11,15 +11,20 @@ public sealed class ReportService : IReportService
     private readonly IConversationRepository _conversations;
     private readonly IUserRepository _users;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IStoryRepository? _stories;
+    private readonly IStoryService? _storyAccess;
 
     public ReportService(IReportRepository reports, IMessageRepository messages,
-        IConversationRepository conversations, IUserRepository users, IUnitOfWork unitOfWork)
+        IConversationRepository conversations, IUserRepository users, IUnitOfWork unitOfWork,
+        IStoryRepository? stories = null, IStoryService? storyAccess = null)
     {
         _reports = reports;
         _messages = messages;
         _conversations = conversations;
         _users = users;
         _unitOfWork = unitOfWork;
+        _stories = stories;
+        _storyAccess = storyAccess;
     }
 
     public async Task<ReportResponse> SubmitAsync(Guid reporterId, CreateReportRequest request, CancellationToken cancellationToken = default)
@@ -34,9 +39,22 @@ public sealed class ReportService : IReportService
             throw new KeyNotFoundException("Raporlanan kullanıcı bulunamadı.");
         if (request.MessageIds.Count > 10 || request.MessageIds.Distinct().Count() != request.MessageIds.Count)
             throw new ArgumentException("Bir rapora en fazla 10 farklı mesaj eklenebilir.");
+        if (request.StoryId.HasValue && (request.ConversationId.HasValue || request.MessageIds.Count > 0))
+            throw new ArgumentException("Hikâye raporu mesaj raporuyla birlikte gönderilemez.");
 
         var report = new UserReport(reporterId, request.ReportedUserId, request.Reason,
             request.Description, request.ConversationId);
+
+        if (request.StoryId.HasValue)
+        {
+            if (_stories is null || _storyAccess is null) throw new InvalidOperationException("Hikâye raporlama altyapısı yapılandırılmamış.");
+            await _storyAccess.GetAsync(reporterId, request.StoryId.Value, cancellationToken);
+            var story = await _stories.GetByIdAsync(request.StoryId.Value, cancellationToken)
+                ?? throw new KeyNotFoundException("Hikâye bulunamadı.");
+            if (story.UserId != request.ReportedUserId || !story.IsAvailableAt(DateTime.UtcNow))
+                throw new ArgumentException("Yalnızca raporlanan kullanıcının etkin hikâyesi raporlanabilir.");
+            report.AddStorySnapshot(new ReportedStory(report.Id, story));
+        }
 
         if (request.ConversationId.HasValue)
         {
@@ -88,10 +106,10 @@ public sealed class ReportService : IReportService
         var response = Map(report, true);
         await _reports.AddAuditAsync(new ModerationAudit(actorId, ModerationActionType.ReportViewed,
             "Rapor ayrıntısı görüntülendi.", report.ReportedUserId, report.Id), cancellationToken);
-        if (response.Messages.Count > 0)
+        if (response.Messages.Count > 0 || response.Stories.Count > 0)
             await _reports.AddAuditAsync(new ModerationAudit(actorId,
                 ModerationActionType.ReportEvidenceViewed,
-                $"Rapor mesaj kanıtı görüntülendi ({response.Messages.Count} kayıt).",
+                $"Rapor kanıtı görüntülendi (mesaj: {response.Messages.Count}, hikâye: {response.Stories.Count}).",
                 report.ReportedUserId, report.Id), cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return response;
@@ -176,6 +194,14 @@ public sealed class ReportService : IReportService
                     MediaAssetIdSnapshot = m.MediaAssetIdSnapshot,
                     ContentSnapshot = m.ContentSnapshot, MediaReferenceSnapshot = m.MediaReferenceSnapshot,
                     MessageType = m.MessageType, MessageCreatedAtUtc = m.MessageCreatedAtUtc
+                }).ToList() : [],
+            Stories = includeMessages ? x.Stories.Where(s => s.EvidenceExpiresAtUtc > now)
+                .Select(s => new ReportedStoryResponse
+                {
+                    StoryId = s.StoryId, MediaAssetIdSnapshot = s.MediaAssetIdSnapshot,
+                    MediaReferenceSnapshot = s.MediaReferenceSnapshot, MediaType = s.MediaType,
+                    CaptionSnapshot = s.CaptionSnapshot, StoryCreatedAtUtc = s.StoryCreatedAtUtc,
+                    EvidenceExpiresAtUtc = s.EvidenceExpiresAtUtc
                 }).ToList() : []
         };
     }

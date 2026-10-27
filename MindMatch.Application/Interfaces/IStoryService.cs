@@ -11,4 +11,5 @@ public interface IStoryService
     Task ViewAsync(Guid viewerId, Guid storyId, CancellationToken cancellationToken = default);
     Task<List<StoryViewerResponse>> GetViewersAsync(Guid userId, Guid storyId, CancellationToken cancellationToken = default);
     Task DeleteAsync(Guid userId, Guid storyId, CancellationToken cancellationToken = default);
+    Task<List<StoryTrayItemResponse>> GetTrayAsync(Guid userId, CancellationToken cancellationToken = default);
 }

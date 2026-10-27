@@ -16,7 +16,7 @@ public sealed class StoriesController : ControllerBase
     public StoriesController(IStoryService service) => _service = service;
 
     [HttpPost]
-    [EnableRateLimiting("media-upload")]
+    [EnableRateLimiting("story-write")]
     public async Task<IActionResult> Create(CreateStoryRequest request, CancellationToken cancellationToken)
     {
         var userId = GetUserId();
@@ -38,6 +38,15 @@ public sealed class StoriesController : ControllerBase
         var userId = GetUserId();
         if (userId is null) return Unauthorized();
         try { return Ok(await _service.GetFeedAsync(userId.Value, take, cancellationToken)); }
+        catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
+    }
+
+    [HttpGet("tray")]
+    public async Task<IActionResult> GetTray(CancellationToken cancellationToken)
+    {
+        var userId = GetUserId();
+        if (userId is null) return Unauthorized();
+        try { return Ok(await _service.GetTrayAsync(userId.Value, cancellationToken)); }
         catch (ArgumentException ex) { return BadRequest(new { message = ex.Message }); }
     }
 

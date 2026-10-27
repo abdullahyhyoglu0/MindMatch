@@ -14,7 +14,8 @@ public sealed class ReportRepository : IReportRepository
         _context.UserReports.AddAsync(report, cancellationToken).AsTask();
 
     public Task<UserReport?> GetByIdAsync(Guid reportId, CancellationToken cancellationToken = default) =>
-        _context.UserReports.Include(x => x.Messages).SingleOrDefaultAsync(x => x.Id == reportId, cancellationToken);
+        _context.UserReports.Include(x => x.Messages).Include(x => x.Stories)
+            .SingleOrDefaultAsync(x => x.Id == reportId, cancellationToken);
 
     public Task<List<UserReport>> GetByReporterAsync(Guid reporterId, CancellationToken cancellationToken = default) =>
         _context.UserReports.Where(x => x.ReporterId == reporterId)
@@ -40,6 +41,18 @@ public sealed class ReportRepository : IReportRepository
     {
         var records = await _context.ReportedMessages.Where(x => x.EvidenceExpiresAtUtc <= nowUtc &&
                 (x.MessageId != null || x.MediaAssetIdSnapshot != null || x.ContentSnapshot != null || x.MediaReferenceSnapshot != null))
+            .OrderBy(x => x.EvidenceExpiresAtUtc).Take(take).ToListAsync(cancellationToken);
+        var cleared = 0;
+        foreach (var record in records)
+            if (record.ClearExpiredEvidence(nowUtc)) cleared++;
+        return cleared;
+    }
+
+    public async Task<int> ClearExpiredStoryEvidenceBatchAsync(DateTime nowUtc, int take,
+        CancellationToken cancellationToken = default)
+    {
+        var records = await _context.ReportedStories.Where(x => x.EvidenceExpiresAtUtc <= nowUtc &&
+                (x.StoryId != null || x.MediaAssetIdSnapshot != null || x.MediaReferenceSnapshot != null || x.CaptionSnapshot != null))
             .OrderBy(x => x.EvidenceExpiresAtUtc).Take(take).ToListAsync(cancellationToken);
         var cleared = 0;
         foreach (var record in records)
